@@ -37,23 +37,27 @@ export function registerSocketHandlers(io) {
       });
       socket.emit('online_list', presencePayload());
       if (!wasOnline) {
-        prisma.user.findUnique({ where: { id: uid }, select: { name: true } })
-          .then((user) => {
-            io.emit('user_online', {
-              userId: uid,
-              userName: user?.name ?? null,
-              device,
-              devices: onlineUsers.getDevices(uid),
-            });
-          })
-          .catch(() => {
-            io.emit('user_online', {
-              userId: uid,
-              userName: null,
-              device,
-              devices: onlineUsers.getDevices(uid),
-            });
+        (async () => {
+          let userName = null;
+          try {
+            const user = await prisma.user.findUnique({ where: { id: uid }, select: { name: true } });
+            userName = user?.name ?? null;
+          } catch (err) {
+            console.error(`[socket] user_online: name lookup failed for ${uid}, retrying`, err);
+            try {
+              const user = await prisma.user.findUnique({ where: { id: uid }, select: { name: true } });
+              userName = user?.name ?? null;
+            } catch (err2) {
+              console.error(`[socket] user_online: name lookup retry failed for ${uid}`, err2);
+            }
+          }
+          io.emit('user_online', {
+            userId: uid,
+            userName,
+            device,
+            devices: onlineUsers.getDevices(uid),
           });
+        })();
       } else {
         io.emit('user_presence', {
           userId: uid,
