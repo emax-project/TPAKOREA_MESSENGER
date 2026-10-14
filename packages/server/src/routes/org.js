@@ -112,8 +112,8 @@ orgRouter.get('/tree', async (req, res) => {
           orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
           include: {
             users: {
-              orderBy: { name: 'asc' },
-              select: { id: true, name: true, email: true, phone: true, extension: true, deskPhone: true, jobTitle: true, statusMessage: true, statusNote: true, avatarUrl: true, updatedAt: true },
+              orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+              select: { id: true, name: true, email: true, phone: true, extension: true, deskPhone: true, jobTitle: true, statusMessage: true, statusNote: true, avatarUrl: true, updatedAt: true, sortOrder: true },
             },
           },
         },
@@ -156,12 +156,20 @@ orgRouter.get('/tree', async (req, res) => {
       departments.forEach((d) => {
         const deptCtx = { deptName: d.name, companyName: companyCtx.companyName, companyAddress: companyCtx.companyAddress };
         const seen = new Set(d.users.map((u) => String(u.id)));
-        const extras = (extrasByDept.get(d.id) || []).filter((u) => !seen.has(String(u.id)));
+        // 겸직(세컨더리 소속)으로 걸린 사람은 이 부서 안에서 순번을 갖지 않으므로 이름순으로만 맨 뒤에 붙인다.
+        // 직속(d.users)은 이미 쿼리에서 sortOrder순으로 왔으니 그대로 둔다.
+        const extras = (extrasByDept.get(d.id) || [])
+          .filter((u) => !seen.has(String(u.id)))
+          .sort((a, b) => a.name.localeCompare(b.name));
         nodes.set(d.id, {
           id: d.id,
           name: d.name,
           parentId: d.parentId ?? null,
-          users: [...d.users, ...extras].map((u) => toUserWithAvatarPath(u, deptCtx)).sort((a, b) => a.name.localeCompare(b.name)),
+          // primary=false(겸직)는 이 부서 안에서 순번을 갖지 않는다 — 관리 화면에서 순번 버튼을 숨기는 기준.
+          users: [
+            ...d.users.map((u) => ({ ...toUserWithAvatarPath(u, deptCtx), primary: true })),
+            ...extras.map((u) => ({ ...toUserWithAvatarPath(u, deptCtx), primary: false })),
+          ],
           children: [],
         });
       });
@@ -192,7 +200,8 @@ orgRouter.get('/tree', async (req, res) => {
       if (me && tree.length > 0 && (tree[0]?.departments?.length ?? 0) > 0) {
         const firstDept = tree[0].departments[0];
         const deptCtx = { deptName: firstDept.name, companyName: tree[0].name, companyAddress: companies[0]?.address ?? null };
-        firstDept.users = [...firstDept.users, toUserWithAvatarPath(me, deptCtx)].sort((a, b) => a.name.localeCompare(b.name));
+        // 부서 정렬 순서를 흐트러뜨리지 않도록 맨 뒤에 붙인다 (이 사람은 어느 부서에도 안 걸려 있던 예외 케이스).
+        firstDept.users = [...firstDept.users, { ...toUserWithAvatarPath(me, deptCtx), primary: false }];
       }
     }
 
@@ -228,10 +237,10 @@ orgRouter.get('/departments/:id/users', async (req, res) => {
       console.warn('[org/departments/:id/users] HR title map unavailable:', err?.message || err);
     }
 
-    const userSelect = { id: true, name: true, email: true, phone: true, extension: true, deskPhone: true, jobTitle: true, statusMessage: true, statusNote: true, avatarUrl: true, updatedAt: true };
+    const userSelect = { id: true, name: true, email: true, phone: true, extension: true, deskPhone: true, jobTitle: true, statusMessage: true, statusNote: true, avatarUrl: true, updatedAt: true, sortOrder: true };
     const users = await prisma.user.findMany({
       where: { departmentId: dept.id },
-      orderBy: { name: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
       select: userSelect,
     });
 
@@ -241,12 +250,12 @@ orgRouter.get('/departments/:id/users', async (req, res) => {
         where: { departmentId: dept.id },
         include: { user: { select: userSelect } },
       });
-      extras = rows.map((r) => r.user);
+      extras = rows.map((r) => r.user).sort((a, b) => a.name.localeCompare(b.name));
     } catch (err) {
       console.warn('[org/departments/:id/users] affiliations unavailable:', err?.message || err);
     }
     const seen = new Set(users.map((u) => String(u.id)));
-    const merged = [...users, ...extras.filter((u) => !seen.has(String(u.id)))];
+    const extrasOnly = extras.filter((u) => !seen.has(String(u.id)));
 
     const deptCtx = { deptName: dept.name, companyName: dept.company?.name ?? null, companyAddress: dept.company?.address ?? null };
     const toUserWithAvatarPath = (u) => {
@@ -261,7 +270,11 @@ orgRouter.get('/departments/:id/users', async (req, res) => {
       };
     };
 
-    return res.json(merged.map(toUserWithAvatarPath).sort((a, b) => a.name.localeCompare(b.name)));
+    // 직속(users)은 sortOrder순, 겸직(extrasOnly)은 이름순으로 맨 뒤에 붙인다 — GET /org/tree와 동일한 규칙.
+    return res.json([
+      ...users.map((u) => ({ ...toUserWithAvatarPath(u), primary: true })),
+      ...extrasOnly.map((u) => ({ ...toUserWithAvatarPath(u), primary: false })),
+    ]);
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to fetch department users' });
@@ -778,6 +791,48 @@ orgRouter.put('/job-titles', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Failed to update job titles' });
+  }
+});
+
+/**
+ * PUT /org/users/:id/order - 같은 부서(직속, departmentId) 안에서 임직원 순번을 한 칸 올리거나 내린다.
+ * body: { direction: 'up' | 'down' }
+ * 겸직(UserAffiliation)으로만 걸린 사람은 이 순서에 들어가지 않는다(항상 이름순으로 맨 뒤에 표시).
+ */
+orgRouter.put('/users/:id/order', async (req, res) => {
+  try {
+    if (!(await assertAdmin(req, res))) return;
+
+    const direction = req.body?.direction;
+    if (direction !== 'up' && direction !== 'down') {
+      return res.status(400).json({ error: "direction must be 'up' or 'down'" });
+    }
+
+    const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!target) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    if (!target.departmentId) return res.status(400).json({ error: 'USER_HAS_NO_DEPARTMENT' });
+
+    const siblings = await prisma.user.findMany({
+      where: { departmentId: target.departmentId },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    const index = siblings.findIndex((u) => u.id === target.id);
+    const swapWith = direction === 'up' ? index - 1 : index + 1;
+    if (swapWith < 0 || swapWith >= siblings.length) {
+      return res.json({ moved: false, reason: 'ALREADY_AT_EDGE' });
+    }
+
+    const reordered = [...siblings];
+    [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
+    await prisma.$transaction(
+      reordered.map((u, i) =>
+        prisma.user.update({ where: { id: u.id }, data: { sortOrder: i + 1 } }),
+      ),
+    );
+    return res.json({ moved: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to reorder user' });
   }
 });
 

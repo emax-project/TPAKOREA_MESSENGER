@@ -232,6 +232,10 @@ export type OrgUser = {
   companyName?: string | null;
   /** 소속 회사 주소 */
   companyAddress?: string | null;
+  /** 같은 부서 안에서의 조회 순번. 작을수록 먼저 나온다(관리자 화면에서만 의미 있음). */
+  sortOrder?: number;
+  /** false면 겸직(세컨더리 소속)으로 이 부서에 걸린 사람 — 이 부서 안에서 순번을 갖지 않는다. */
+  primary?: boolean;
 };
 export type OrgDepartment = {
   id: string;
@@ -560,6 +564,9 @@ export const orgApi = {
   /** 부서를 펼칠 때 그 부서(하위 부서 제외) 소속 사용자 목록을 가져온다. */
   departmentUsers: (departmentId: string) =>
     api.get(`/org/departments/${departmentId}/users`) as Promise<OrgUser[]>,
+  /** 같은 부서(직속) 안에서 임직원 순번을 한 칸 이동한다. 겸직으로만 걸린 사람은 대상이 아니다. */
+  reorderUser: (id: string, direction: 'up' | 'down') =>
+    api.put(`/org/users/${id}/order`, { direction }) as Promise<{ moved: boolean }>,
   online: () => api.get('/org/online') as Promise<{
     userIds: string[];
     presence?: Record<string, { desktop: boolean; mobile: boolean }>;

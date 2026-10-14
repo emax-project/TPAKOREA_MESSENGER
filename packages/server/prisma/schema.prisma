@@ -68,6 +68,8 @@ model User {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   departmentId    String?
+  // 같은 부서 안에서의 조회 순번(조직도 표시용). 작을수록 먼저 나온다.
+  sortOrder       Int           @default(0)
   statusMessage   String?       // 프레즌스 상태(온라인/자리비움 등)
   statusNote      String?       // 자유 상태 메시지
   notepad         String?       // 개인 메모장(본인만 보임, 자동저장)
@@ -89,6 +91,7 @@ model User {
   orgGroupMemberships  OrgGroupMember[]
 
   @@index([departmentId])
+  @@index([departmentId, sortOrder])
 }
 
 /// 겸직 소속. User.departmentId는 메신저에 표시할 현재 법인/부서.

@@ -50,6 +50,26 @@ function BadgeIcon() {
   );
 }
 
+/** 순번 올리기 / 내리기 */
+function CaretIcon({ up }: { up: boolean }) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      style={{ transform: up ? undefined : 'rotate(180deg)' }}
+    >
+      <path d="m6 15 6-6 6 6" />
+    </svg>
+  );
+}
+
 /** 비밀번호 초기화 */
 function KeyIcon() {
   return (
@@ -159,6 +179,18 @@ function UserManageSection({ isDark, isNarrowLayout = false, currentUserId, embe
       setError(friendlyError(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const reorderUser = async (user: OrgUser, direction: 'up' | 'down') => {
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await orgApi.reorderUser(user.id, direction);
+      queryClient.invalidateQueries({ queryKey: ['org'] });
+      if (!r.moved) setNotice(`'${user.name}'는 이미 부서 안에서 ${direction === 'up' ? '맨 위' : '맨 아래'}입니다.`);
+    } catch (e) {
+      setError(friendlyError(e));
     }
   };
 
@@ -272,6 +304,36 @@ function UserManageSection({ isDark, isNarrowLayout = false, currentUserId, embe
                 </span>
                 <span className={cn('min-w-0 flex-1 truncate text-[11px]', muted)}>{u.email}</span>
                 {!selectable(u) && <span className={cn('shrink-0 text-[11px]', muted)}>본인</span>}
+                {u.primary !== false && (
+                  <>
+                    <button
+                      type="button"
+                      title="부서 안 순번 올리기"
+                      aria-label={`${u.name} 순번 올리기`}
+                      disabled={busy}
+                      onClick={() => void reorderUser(u, 'up')}
+                      className={cn(
+                        'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border-none bg-transparent p-0 cursor-pointer disabled:opacity-40',
+                        isDark ? 'text-slate-300 hover:bg-slate-700' : accent.custom ? 'text-[var(--color-brand-dark)] hover:bg-[rgba(var(--color-brand-dark-rgb),0.1)]' : 'text-slate-500 hover:bg-slate-200',
+                      )}
+                    >
+                      <CaretIcon up />
+                    </button>
+                    <button
+                      type="button"
+                      title="부서 안 순번 내리기"
+                      aria-label={`${u.name} 순번 내리기`}
+                      disabled={busy}
+                      onClick={() => void reorderUser(u, 'down')}
+                      className={cn(
+                        'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border-none bg-transparent p-0 cursor-pointer disabled:opacity-40',
+                        isDark ? 'text-slate-300 hover:bg-slate-700' : accent.custom ? 'text-[var(--color-brand-dark)] hover:bg-[rgba(var(--color-brand-dark-rgb),0.1)]' : 'text-slate-500 hover:bg-slate-200',
+                      )}
+                    >
+                      <CaretIcon up={false} />
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   title="직급 지정"

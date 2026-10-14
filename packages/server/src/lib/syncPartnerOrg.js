@@ -137,20 +137,22 @@ export async function syncPartnerOrg(opts = {}) {
     const existing = await prisma.department.findFirst({
       where: { companyId: company.id, externalCode: d.deptCode },
     });
-    const sortOrder = (Number(d.level) || 1) * 1000;
     let row;
     if (existing) {
+      // sortOrder는 건드리지 않는다 — 관리자가 조직도 관리 화면에서 수동으로 정렬해 둔 순서를
+      // 동기화가 돌 때마다 레벨 기준값으로 덮어써 버리면 안 되기 때문 (CSINTECH 문의로 확인된 문제).
       row = await prisma.department.update({
         where: { id: existing.id },
-        data: { name: d.deptName, sortOrder },
+        data: { name: d.deptName },
       });
     } else {
+      // 새로 생기는 부서만 레벨 기준 기본값을 매겨 둔다. 이후 순서는 관리자가 자유롭게 바꿀 수 있다.
       row = await prisma.department.create({
         data: {
           name: d.deptName,
           companyId: company.id,
           externalCode: d.deptCode,
-          sortOrder,
+          sortOrder: (Number(d.level) || 1) * 1000,
           parentId: null,
         },
       });
