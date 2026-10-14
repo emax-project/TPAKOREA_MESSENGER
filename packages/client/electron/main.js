@@ -93,6 +93,35 @@ const NOTIF_HEIGHT = 100;
 const NOTIF_HEIGHT_PROGRESS = 128;
 const NOTIF_DURATION_MS = 4500;
 
+// 메인 창 크기(width/height) 기억 — PC에서 사용자가 원하는 대로 넓혀 쓸 수 있도록
+// 모바일 기본 규격(430x900)은 최초 실행 시에만 적용하고, 이후에는 마지막으로 사용한 크기를 복원한다.
+const WINDOW_BOUNDS_PREF_PATH = path.join(app.getPath('userData'), 'window-bounds.json');
+const DEFAULT_MAIN_WINDOW_WIDTH = 430;
+const DEFAULT_MAIN_WINDOW_HEIGHT = 900;
+
+function readWindowBoundsPref() {
+  try {
+    const raw = fs.readFileSync(WINDOW_BOUNDS_PREF_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const width = Number(parsed?.width);
+    const height = Number(parsed?.height);
+    return {
+      width: Number.isFinite(width) ? width : null,
+      height: Number.isFinite(height) ? height : null,
+    };
+  } catch {
+    return { width: null, height: null };
+  }
+}
+
+function writeWindowBoundsPref(bounds) {
+  try {
+    fs.writeFileSync(WINDOW_BOUNDS_PREF_PATH, JSON.stringify(bounds, null, 2), 'utf8');
+  } catch {
+    // 저장 실패(읽기 전용 FS 등)는 무시 — 다음 실행 때 기본 크기로 돌아갈 뿐
+  }
+}
+
 function escapeHtml(str) {
   if (typeof str !== 'string') return '';
   return str
@@ -652,6 +681,18 @@ function createWindow(options = {}) {
     win.on('closed', () => {
       if (mainWindow === win) mainWindow = null;
     });
+
+    // 메인 화면(로그인 화면 제외)에서 사용자가 드래그로 크기를 바꾸면 기억해 뒀다가 다음 실행 때 복원
+    let boundsSaveTimer = null;
+    win.on('resize', () => {
+      if (win.__emaxUiMode !== 'main' || win.isMaximized()) return;
+      clearTimeout(boundsSaveTimer);
+      boundsSaveTimer = setTimeout(() => {
+        if (win.isDestroyed()) return;
+        const [width, height] = win.getSize();
+        writeWindowBoundsPref({ width, height });
+      }, 400);
+    });
   }
 
   return win;
@@ -774,6 +815,7 @@ ipcMain.handle('window-set-ui-mode', (event, mode, width, height) => {
   const isLogin = mode === 'login';
   if (win.isMaximized()) win.unmaximize();
   win.setMaximizable(!isLogin);
+  win.__emaxUiMode = isLogin ? 'login' : 'main';
   if (isLogin) {
     const w = Math.max(360, Math.round(Number(width) || 430));
     const h = Math.max(560, Math.round(Number(height) || 720));
@@ -790,9 +832,17 @@ ipcMain.handle('window-set-ui-mode', (event, mode, width, height) => {
     }
   } else {
     const wa = screen.getPrimaryDisplay().workAreaSize;
+    const maxW = Math.max(wa.width, 430);
+    const maxH = Math.max(wa.height, 900);
     win.setResizable(true);
     win.setMinimumSize(360, 560);
-    win.setMaximumSize(Math.max(wa.width, 430), Math.max(wa.height, 900));
+    win.setMaximumSize(maxW, maxH);
+    // 로그인 창(모바일 고정 규격)에서 넘어온 직후에는 마지막으로 사용자가 조정한 크기를 복원하고,
+    // 저장된 값이 없으면(최초 실행) 기본 모바일 규격을 사용한다.
+    const pref = readWindowBoundsPref();
+    const targetW = Math.min(Math.max(pref.width ?? DEFAULT_MAIN_WINDOW_WIDTH, 360), maxW);
+    const targetH = Math.min(Math.max(pref.height ?? DEFAULT_MAIN_WINDOW_HEIGHT, 560), maxH);
+    win.setSize(Math.round(targetW), Math.round(targetH));
     if (process.platform === 'win32') {
       try {
         win.setTitleBarOverlay({ color: '#1e293b', symbolColor: '#e2e8f0', height: 38 });

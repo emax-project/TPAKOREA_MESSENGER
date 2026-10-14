@@ -29,7 +29,6 @@ import MainOverlays from './main/components/MainOverlays';
 import PasswordChangeModal from './main/components/PasswordChangeModal';
 import { cn } from '../utils/cn';
 import { filterDepartments, flattenDepartments, defaultOpenDepartmentIds, companyUserCount, visibleOpenDepartmentIds } from '../utils/orgTree';
-import { APP_MAX_WIDTH, APP_WINDOW_HEIGHT } from '../layout/constants';
 import { presenceFromList, type OnlinePresenceMap } from '../utils/presence';
 import { openChatRoomWindow } from '../utils/chatPopout';
 
@@ -123,14 +122,12 @@ export default function Main() {
   const navigate = useNavigate();
   const token = useAuthStore((s) => s.token);
 
-  // Electron: 메인 화면에서는 모바일 규격 창 크기를 일관되게 유지한다.
+  // Electron: 메인 화면 진입 시 창 크기를 '마지막으로 사용자가 조정한 크기'로 복원한다
+  // (최초 실행 시에만 기본 모바일 규격을 쓰고, 이후에는 메인 프로세스가 기억한 크기를 적용 — main.js 참고).
+  // 창 자체는 계속 자유롭게 리사이즈 가능하므로, 조직도 편집 등 넓은 화면이 필요할 때 PC에서 드래그로 넓힐 수 있다.
   useEffect(() => {
     if (!token || !window.electronAPI) return;
     void window.electronAPI.setWindowUiMode?.('main');
-    const resize = () => window.electronAPI!.windowResize(APP_MAX_WIDTH, APP_WINDOW_HEIGHT);
-    resize();
-    const t = setTimeout(resize, 300);
-    return () => clearTimeout(t);
   }, [token]);
   const user = useAuthStore((s) => s.user);
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
