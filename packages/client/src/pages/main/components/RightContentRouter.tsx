@@ -80,6 +80,8 @@ type RightContentRouterProps = {
     orgGroups: OrgGroup[];
     companyMemberCounts?: Record<string, number>;
     treeOpen: Record<string, boolean>;
+    selectedDeptId: string | null;
+    onSelectDept: (id: string | null) => void;
     orgStarred: Set<string>;
     onToggleOrgStar: (id: string) => void;
     orgFriends: Set<string>;
@@ -214,6 +216,8 @@ function RightContentRouter({
             orgGroups={orgProps.orgGroups}
             companyMemberCounts={orgProps.companyMemberCounts}
             treeOpen={orgProps.treeOpen}
+            selectedDeptId={orgProps.selectedDeptId}
+            onSelectDept={orgProps.onSelectDept}
             orgStarred={orgProps.orgStarred}
             onToggleOrgStar={orgProps.onToggleOrgStar}
             orgFriends={orgProps.orgFriends}

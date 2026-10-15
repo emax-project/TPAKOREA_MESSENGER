@@ -114,6 +114,9 @@ export type OrgTreeProps = {
   viewMode?: 'combined' | 'split';
   companyMemberCounts?: Record<string, number>;
   treeOpen: Record<string, boolean>;
+  /** "나눠서보기"에서 고른 부서. 접혀 있어도 이 부서의 인원은 계속 지연 로드된다(Main.tsx openDeptIdList 참고). */
+  selectedDeptId: string | null;
+  onSelectDept: (id: string | null) => void;
   orgStarred: Set<string>;
   onToggleOrgStar: (id: string) => void;
   orgFriends: Set<string>;
@@ -278,6 +281,8 @@ function OrgTree({
   viewMode = 'combined',
   companyMemberCounts,
   treeOpen,
+  selectedDeptId,
+  onSelectDept,
   orgFriends,
   onToggleOrgFriend,
   onlineUserIds,
@@ -297,7 +302,6 @@ function OrgTree({
   renderStatusIcon,
 }: OrgTreeProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
   // 본부·팀 단계는 접어둔 적이 없다면 기본으로 펼쳐 보인다(매번 본부를 눌러야 하는 불편 방지).
   const defaultOpenDeptIds = useMemo(() => defaultOpenDepartmentIds(orgTree), [orgTree]);
   const [splitRatio, setSplitRatio] = useState(() => {
@@ -715,7 +719,7 @@ function OrgTree({
           <button
             type="button"
             onClick={() => {
-              setSelectedDeptId(dept.id);
+              onSelectDept(dept.id);
               onToggleTree(deptKey);
             }}
             className={cn(
@@ -873,7 +877,10 @@ function OrgTree({
           <div className={cn('mb-1.5 px-1 text-[12px] font-bold', isDark ? 'text-slate-300' : 'text-slate-600')}>
             {selectedDept ? `${selectedDept.name} · ${splitUsers.length}명` : '부서를 선택하세요'}
           </div>
-          {selectedDept && splitUsers.length === 0 && (
+          {selectedDept && splitUsers.length === 0 && selectedDept.userCount !== undefined && !selectedDept.usersLoaded && (
+            <p className={cn('px-1 text-[12px]', isDark ? 'text-slate-500' : 'text-slate-400')}>불러오는 중...</p>
+          )}
+          {selectedDept && splitUsers.length === 0 && (selectedDept.userCount === undefined || selectedDept.usersLoaded) && (
             <p className={cn('px-1 text-[12px]', isDark ? 'text-slate-500' : 'text-slate-400')}>소속 사원이 없습니다.</p>
           )}
           <ul className="m-0 list-none space-y-0.5 p-0">

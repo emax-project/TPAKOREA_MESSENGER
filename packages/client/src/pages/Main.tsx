@@ -205,6 +205,10 @@ export default function Main() {
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   });
   const [treeOpen, setTreeOpen] = useState<Record<string, boolean>>({});
+  // 조직도 "나눠서보기"에서 고른 부서. 트리 펼침 상태(treeOpen)와는 별개라, 고른 뒤
+  // 접어도(아래 openDeptIdList에서 따로 챙겨 주지 않으면) 인원이 안 불러와져 "0명"으로
+  // 보이는 문제가 있었다 — 접혀 있어도 선택된 부서는 항상 지연 로드 대상에 포함시킨다.
+  const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
   const [orgStarred, setOrgStarred] = useState<Set<string>>(() => {
     try { const raw = localStorage.getItem('emax_org_favorites'); if (!raw) return new Set(); const arr = JSON.parse(raw); return new Set(Array.isArray(arr) ? arr.map(String) : []); } catch { return new Set(); }
   });
@@ -353,11 +357,14 @@ export default function Main() {
   // (구조는 가벼운 트리·전체 트리가 동일하므로 항상 가벼운 트리 기준으로 계산해도 된다)
   const defaultOpenDeptIds = useMemo(() => defaultOpenDepartmentIds(orgTreeShallow ?? []), [orgTreeShallow]);
 
-  // 전체 트리가 필요 없을 때만: 현재 화면에 펼쳐져 보이는 부서들의 사용자 목록을 병렬로 지연 로드.
+  // 전체 트리가 필요 없을 때만: 현재 화면에 펼쳐져 보이는 부서들 + "나눠서보기"에서 선택된
+  // 부서(접혀 있어도)의 사용자 목록을 병렬로 지연 로드.
   const openDeptIdList = useMemo(() => {
     if (needsFullOrgTree) return [] as string[];
-    return [...visibleOpenDepartmentIds(orgTreeShallow ?? [], treeOpen, defaultOpenDeptIds)];
-  }, [needsFullOrgTree, orgTreeShallow, treeOpen, defaultOpenDeptIds]);
+    const ids = new Set(visibleOpenDepartmentIds(orgTreeShallow ?? [], treeOpen, defaultOpenDeptIds));
+    if (selectedDeptId) ids.add(selectedDeptId);
+    return [...ids];
+  }, [needsFullOrgTree, orgTreeShallow, treeOpen, defaultOpenDeptIds, selectedDeptId]);
   const deptUserQueries = useQueries({
     queries: openDeptIdList.map((id) => ({
       queryKey: ['org', 'department-users', id],
@@ -1260,6 +1267,8 @@ export default function Main() {
                 orgGroups,
                 companyMemberCounts,
                 treeOpen,
+                selectedDeptId,
+                onSelectDept: setSelectedDeptId,
                 orgStarred,
                 onToggleOrgStar: toggleOrgStar,
                 orgFriends,

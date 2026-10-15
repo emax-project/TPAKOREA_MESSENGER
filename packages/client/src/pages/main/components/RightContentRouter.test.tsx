@@ -118,6 +118,8 @@ const baseProps = () => ({
     orgTree: [],
     orgGroups: [],
     treeOpen: {},
+    selectedDeptId: null,
+    onSelectDept: vi.fn(),
     orgStarred: new Set<string>(),
     onToggleOrgStar: vi.fn(),
     orgFriends: new Set<string>(),

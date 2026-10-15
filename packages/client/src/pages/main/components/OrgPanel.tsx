@@ -44,6 +44,8 @@ type OrgPanelProps = {
   orgGroups: OrgGroup[];
   companyMemberCounts?: Record<string, number>;
   treeOpen: Record<string, boolean>;
+  selectedDeptId: string | null;
+  onSelectDept: (id: string | null) => void;
   orgStarred: Set<string>;
   onToggleOrgStar: (id: string) => void;
   orgFriends: Set<string>;
@@ -83,6 +85,8 @@ function OrgPanel({
   orgGroups,
   companyMemberCounts,
   treeOpen,
+  selectedDeptId,
+  onSelectDept,
   orgStarred,
   onToggleOrgStar,
   orgFriends,
@@ -298,6 +302,8 @@ function OrgPanel({
           orgGroups={orgGroups}
           companyMemberCounts={companyMemberCounts}
           treeOpen={treeOpen}
+          selectedDeptId={selectedDeptId}
+          onSelectDept={onSelectDept}
           orgStarred={orgStarred}
           onToggleOrgStar={onToggleOrgStar}
           orgFriends={orgFriends}
