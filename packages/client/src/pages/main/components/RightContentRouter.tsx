@@ -120,9 +120,11 @@ type RightContentRouterProps = {
   settingsProps: {
     notificationsSnoozedUntil: number;
     notificationSoundEnabled: boolean;
+    notificationPopupEnabled: boolean;
     snoozeNotifications: (minutes: number) => void;
     clearSnooze: () => void;
     toggleNotificationSound: () => void;
+    toggleNotificationPopup: () => void;
     toggleDark: () => void;
     accentTheme: import('../../../utils/orgTheme').OrgThemeId;
     onAccentThemeChange: (id: import('../../../utils/orgTheme').OrgThemeId) => void;
@@ -320,9 +322,11 @@ function RightContentRouter({
             user={settingsProps.user}
             notificationsSnoozedUntil={settingsProps.notificationsSnoozedUntil}
             notificationSoundEnabled={settingsProps.notificationSoundEnabled}
+            notificationPopupEnabled={settingsProps.notificationPopupEnabled}
             snoozeNotifications={settingsProps.snoozeNotifications}
             clearSnooze={settingsProps.clearSnooze}
             toggleNotificationSound={settingsProps.toggleNotificationSound}
+            toggleNotificationPopup={settingsProps.toggleNotificationPopup}
             toggleDark={settingsProps.toggleDark}
             accentTheme={settingsProps.accentTheme}
             onAccentThemeChange={settingsProps.onAccentThemeChange}

@@ -158,9 +158,11 @@ const baseProps = () => ({
   settingsProps: {
     notificationsSnoozedUntil: 0,
     notificationSoundEnabled: true,
+    notificationPopupEnabled: true,
     snoozeNotifications: vi.fn(),
     clearSnooze: vi.fn(),
     toggleNotificationSound: vi.fn(),
+    toggleNotificationPopup: vi.fn(),
     toggleDark: vi.fn(),
     accentTheme: 'default' as const,
     onAccentThemeChange: vi.fn(),

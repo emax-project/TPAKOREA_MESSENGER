@@ -5,6 +5,7 @@ import { io, type Socket } from 'socket.io-client';
 import { filesApi, getBaseUrl, getSocketUrl, navigateToLogin, type Message, type Room } from '../../../api';
 import { useMainSocketStore } from '../../../store';
 import { playNotificationSound } from '../../../utils/notificationSound';
+import { isNotificationPopupEnabled } from '../../../utils/notificationPopup';
 import {
   detectClientDevice,
   mergePresence,
@@ -144,7 +145,7 @@ export function useMainSocket({
         const body = isTopic && roomName ? `${senderName}: ${msg.fileUrl && msg.fileName ? msg.fileName : msg.content}` : (msg.fileUrl && msg.fileName ? msg.fileName : msg.content);
         playNotificationSound();
         const electronAPI = window.electronAPI;
-        if (electronAPI?.showNotification) {
+        if (isNotificationPopupEnabled() && electronAPI?.showNotification) {
           (async () => {
             let icon: string | null = null;
             let imagePreview: string | null = null;
@@ -189,7 +190,7 @@ export function useMainSocket({
               electronAPI.showNotification(title, body, msg.roomId);
             }
           })();
-        } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           if (typeof document !== 'undefined' && document.hidden) new Notification(title, { body });
         }
       }
@@ -237,9 +238,9 @@ export function useMainSocket({
         const name = payload.userName?.trim() || String(payload.userId);
         const title = 'TPA-Korea';
         const body = `${name}님이 로그인했습니다.`;
-        if (window.electronAPI?.showNotification) {
+        if (isNotificationPopupEnabled() && window.electronAPI?.showNotification) {
           window.electronAPI.showNotification(title, body);
-        } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+        } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
           new Notification(title, { body });
         }
       }
@@ -278,9 +279,9 @@ export function useMainSocket({
       const body = payload.subject || '';
       playNotificationSound();
       const electronAPI = window.electronAPI;
-      if (electronAPI?.showNotification) {
+      if (isNotificationPopupEnabled() && electronAPI?.showNotification) {
         electronAPI.showNotification(title, body);
-      } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+      } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
         new Notification(title, { body });
       }
     });

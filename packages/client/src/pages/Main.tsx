@@ -240,12 +240,14 @@ export default function Main() {
     mutedRoomIds,
     notificationsSnoozedUntil,
     notificationSoundEnabled,
+    notificationPopupEnabled,
     mutedRoomIdsRef,
     notificationsSnoozedUntilRef,
     toggleMuteRoom,
     snoozeNotifications,
     clearSnooze,
     toggleNotificationSound,
+    toggleNotificationPopup,
   } = useNotificationPrefs(showToast);
   const {
     appVersion,
@@ -1311,9 +1313,11 @@ export default function Main() {
               settingsProps={{
                 notificationsSnoozedUntil,
                 notificationSoundEnabled,
+                notificationPopupEnabled,
                 snoozeNotifications,
                 clearSnooze,
                 toggleNotificationSound,
+                toggleNotificationPopup,
                 toggleDark,
                 accentTheme,
                 onAccentThemeChange: setAccentTheme,

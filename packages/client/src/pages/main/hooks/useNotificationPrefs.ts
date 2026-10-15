@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isNotificationPopupEnabled } from '../../../utils/notificationPopup';
 
 type ShowToast = (message: string, type?: 'info' | 'success' | 'error') => void;
 
@@ -28,6 +29,13 @@ export function useNotificationPrefs(showToast: ShowToast) {
       return true;
     }
   });
+  const [notificationPopupEnabled, setNotificationPopupEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('notificationPopupEnabled') !== '0';
+    } catch {
+      return true;
+    }
+  });
 
   const mutedRoomIdsRef = useRef<Set<string>>(mutedRoomIds);
   const notificationsSnoozedUntilRef = useRef<number>(notificationsSnoozedUntil);
@@ -50,9 +58,9 @@ export function useNotificationPrefs(showToast: ShowToast) {
       try {
         const title = 'TPA-Korea';
         const body = '알림 일시 중지가 해제되었습니다';
-        if (window.electronAPI?.showNotification) {
+        if (isNotificationPopupEnabled() && window.electronAPI?.showNotification) {
           window.electronAPI.showNotification(title, body);
-        } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           new Notification(title, { body });
         }
       } catch {
@@ -108,15 +116,30 @@ export function useNotificationPrefs(showToast: ShowToast) {
     });
   };
 
+  const toggleNotificationPopup = () => {
+    setNotificationPopupEnabled((prev) => {
+      const next = !prev;
+      try {
+        if (next) localStorage.removeItem('notificationPopupEnabled');
+        else localStorage.setItem('notificationPopupEnabled', '0');
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
   return {
     mutedRoomIds,
     notificationsSnoozedUntil,
     notificationSoundEnabled,
+    notificationPopupEnabled,
     mutedRoomIdsRef,
     notificationsSnoozedUntilRef,
     toggleMuteRoom,
     snoozeNotifications,
     clearSnooze,
     toggleNotificationSound,
+    toggleNotificationPopup,
   };
 }

@@ -7,6 +7,7 @@ import { AuthCard } from '../components/AuthCard';
 import UITextInput from '../components/ui/UITextInput';
 import { APP_MAX_WIDTH } from '../layout/constants';
 import { applyWindowPinClass, isMacElectron } from '../utils/electronChrome';
+import { isNotificationPopupEnabled } from '../utils/notificationPopup';
 
 const LOGIN_WINDOW_HEIGHT = 720;
 const REMEMBER_EMAIL_KEY = 'emax_remember_email';
@@ -73,7 +74,9 @@ export default function Login() {
         }
       } catch { /* ignore */ }
       setAuth(user, token, { mustChangePassword: !!mustChangePassword });
-      window.electronAPI?.showNotification('로그인', `${user.name}님 로그인되었습니다.`);
+      if (isNotificationPopupEnabled()) {
+        window.electronAPI?.showNotification('로그인', `${user.name}님 로그인되었습니다.`);
+      }
       navigate('/', { replace: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
