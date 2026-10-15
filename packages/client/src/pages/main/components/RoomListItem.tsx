@@ -3,6 +3,7 @@ import type { KeyboardEvent, MouseEvent } from 'react';
 import type { Room } from '../../../api';
 import { useThemeStore } from '../../../store';
 import { cn } from '../../../utils/cn';
+import { formatRoomListTimestamp } from '../utils/date';
 
 type RoomListItemProps = {
   room: Room;
@@ -68,7 +69,7 @@ function RoomListItem({
       <div className="shrink-0 flex flex-col items-end gap-[3px]">
         {room.lastMessage && (
           <span className={cn('text-[10px]', isDark ? 'text-slate-400' : 'text-slate-500')}>
-            {new Date(room.lastMessage.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
+            {formatRoomListTimestamp(room.lastMessage.createdAt)}
           </span>
         )}
         {mutedRoomIds.has(room.id) && <span className="text-[10px] text-[#94a3b8]" title="알림 꺼짐">음소거</span>}
