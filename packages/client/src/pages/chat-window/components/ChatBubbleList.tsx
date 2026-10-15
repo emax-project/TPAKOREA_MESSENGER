@@ -367,93 +367,99 @@ const ChatBubbleList = forwardRef<ChatBubbleListHandle, ChatBubbleListProps>(fun
                   <div className="w-[34px] h-[34px] shrink-0" aria-hidden />
                 )
               )}
-              <div className={cn('relative w-fit max-w-[75%] min-w-0', isMine && 'ml-auto')}>
-                <div
-                  className={cn(
-                    isHighlighted && 'message-bubble-highlight',
-                    'min-w-[80px] py-2.5 px-3.5 rounded-2xl rounded-tl shadow-sm',
-                    isMine
-                      ? (useCustomAccent ? 'text-white rounded-tl-2xl rounded-tr shadow-sm' : 'bg-brand-dark text-white rounded-tl-2xl rounded-tr shadow-sm')
-                      : isDark ? 'bg-slate-700 text-slate-200' : 'bg-white text-slate-800',
-                  )}
-                  style={isMine && useCustomAccent ? { background: orgTheme.accent } : undefined}
-                >
-                  {m.poll ? (
-                    <PollCard poll={m.poll} myId={myId} isMine={isMine} />
-                  ) : m.eventTitle != null ? (
-                    <EventCard title={m.eventTitle} startAt={m.eventStartAt!} endAt={m.eventEndAt!} description={m.eventDescription ?? undefined} isMine={isMine} />
-                  ) : m.fileUrl ? (
-                    <FileMessage message={m} />
-                  ) : (
-                    <>
-                      <span className="whitespace-pre-wrap break-words text-[15px] leading-snug">
-                      {renderMessageContent(m.content, isDark, isMine)}
-                    </span>
-                      {extractFirstUrl(m.content) && (
-                        <LinkPreview url={extractFirstUrl(m.content)!} isDark={isDark} />
-                      )}
-                    </>
-                  )}
-                  {m.editedAt && <span className="text-[10px] opacity-60 mt-1 block">(수정됨)</span>}
-                  <div className="flex justify-end items-center gap-1.5 mt-1.5 flex-wrap">
-                    <span className={cn('text-[11px]', isMine ? 'text-white' : isDark ? 'text-slate-300' : 'text-slate-500')}>
-                      {new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    {isMine && room && (() => {
-                      const memberCount = room.members?.length ?? 0;
-                      if (memberCount <= 2) return null;
-                      const totalReaders = memberCount - 1;
-                      const readCount = m.readCount ?? 0;
-                      const unreadCount = Math.max(0, totalReaders - readCount);
-                      if (unreadCount === 0) return null;
-                      return <span className="text-xs font-bold text-slate-100">{unreadCount}</span>;
-                    })()}
-                  </div>
-                </div>
-                {(isHovered || alwaysShowActions) && !m.deletedAt && (
+              <div className={cn('w-fit max-w-[75%] min-w-0', isMine && 'ml-auto')}>
+                <div className="relative">
                   <div
                     className={cn(
-                      'absolute bottom-0 flex items-center gap-0.5',
-                      isMine ? 'right-full mr-1.5' : 'left-full ml-1.5',
+                      isHighlighted && 'message-bubble-highlight',
+                      'min-w-[80px] py-2.5 px-3.5 rounded-2xl rounded-tl shadow-sm',
+                      isMine
+                        ? (useCustomAccent ? 'text-white rounded-tl-2xl rounded-tr shadow-sm' : 'bg-brand-dark text-white rounded-tl-2xl rounded-tr shadow-sm')
+                        : isDark ? 'bg-slate-700 text-slate-200' : 'bg-white text-slate-800',
                     )}
+                    style={isMine && useCustomAccent ? { background: orgTheme.accent } : undefined}
                   >
-                    <MessageActionButton
-                      isDark={isDark}
-                      isActive={false}
-                      onClick={() => setReplyTo(m)}
-                      title="답장"
-                      icon={
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 10l7-7v4c8 0 11 4 11 11-2-5-5-7-11-7v4l-7-5z" />
-                        </svg>
-                      }
-                    />
-                    <div style={{ position: 'relative' }}>
+                    {m.poll ? (
+                      <PollCard poll={m.poll} myId={myId} isMine={isMine} />
+                    ) : m.eventTitle != null ? (
+                      <EventCard title={m.eventTitle} startAt={m.eventStartAt!} endAt={m.eventEndAt!} description={m.eventDescription ?? undefined} isMine={isMine} />
+                    ) : m.fileUrl ? (
+                      <FileMessage message={m} />
+                    ) : (
+                      <>
+                        <span className="whitespace-pre-wrap break-words text-[15px] leading-snug">
+                        {renderMessageContent(m.content, isDark, isMine)}
+                      </span>
+                        {extractFirstUrl(m.content) && (
+                          <LinkPreview url={extractFirstUrl(m.content)!} isDark={isDark} />
+                        )}
+                      </>
+                    )}
+                    {m.editedAt && <span className="text-[10px] opacity-60 mt-1 block">(수정됨)</span>}
+                  </div>
+                  {(isHovered || alwaysShowActions) && !m.deletedAt && (
+                    <div
+                      className={cn(
+                        'absolute bottom-0 flex items-center gap-0.5',
+                        isMine ? 'right-full mr-1.5' : 'left-full ml-1.5',
+                      )}
+                    >
                       <MessageActionButton
                         isDark={isDark}
-                        isActive={emojiPickerMsg === m.id}
-                        onClick={() => setEmojiPickerMsg(emojiPickerMsg === m.id ? null : m.id)}
-                        title="반응"
+                        isActive={false}
+                        onClick={() => setReplyTo(m)}
+                        title="답장"
                         icon={
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="10" />
-                            <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                            <line x1="9" y1="9" x2="9.01" y2="9" />
-                            <line x1="15" y1="9" x2="15.01" y2="9" />
+                            <path d="M3 10l7-7v4c8 0 11 4 11 11-2-5-5-7-11-7v4l-7-5z" />
                           </svg>
                         }
                       />
+                      <div style={{ position: 'relative' }}>
+                        <MessageActionButton
+                          isDark={isDark}
+                          isActive={emojiPickerMsg === m.id}
+                          onClick={() => setEmojiPickerMsg(emojiPickerMsg === m.id ? null : m.id)}
+                          title="반응"
+                          icon={
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="12" r="10" />
+                              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                              <line x1="9" y1="9" x2="9.01" y2="9" />
+                              <line x1="15" y1="9" x2="15.01" y2="9" />
+                            </svg>
+                          }
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
-                {emojiPickerMsg === m.id && (
-                  <EmojiPicker
-                    onSelect={(emoji) => handleReaction(m.id, emoji)}
-                    onClose={() => setEmojiPickerMsg(null)}
-                    anchorBelow
-                    alignRight={isMine}
-                  />
-                )}
+                  )}
+                  {emojiPickerMsg === m.id && (
+                    <EmojiPicker
+                      onSelect={(emoji) => handleReaction(m.id, emoji)}
+                      onClose={() => setEmojiPickerMsg(null)}
+                      anchorBelow
+                      alignRight={isMine}
+                    />
+                  )}
+                </div>
+                <div className={cn('flex items-center gap-1.5 mt-1 px-0.5 flex-wrap', isMine ? 'justify-end' : 'justify-start')}>
+                  <span className={cn('text-[11px]', isDark ? 'text-slate-400' : 'text-slate-500')}>
+                    {new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {isMine && room && (() => {
+                    const memberCount = room.members?.length ?? 0;
+                    if (memberCount <= 2) return null;
+                    const totalReaders = memberCount - 1;
+                    const readCount = m.readCount ?? 0;
+                    const unreadCount = Math.max(0, totalReaders - readCount);
+                    if (unreadCount === 0) return null;
+                    return (
+                      <span className={cn('text-[11px] font-bold', isDark ? 'text-brand-light' : 'text-brand-dark')}>
+                        {unreadCount}
+                      </span>
+                    );
+                  })()}
+                </div>
               </div>
             </div>
 
