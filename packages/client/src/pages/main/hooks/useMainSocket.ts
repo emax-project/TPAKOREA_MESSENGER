@@ -193,16 +193,7 @@ export function useMainSocket({
         setOnlinePresence((prev) => mergePresence(prev, uid, payload.devices ?? null, payload.device));
         setOnlineUserIds((prev) => new Set([...prev, uid]));
       }
-      if (payload.userId && String(payload.userId) !== String(myIdRef.current)) {
-        const name = payload.userName?.trim() || String(payload.userId);
-        const title = 'TPA-Korea';
-        const body = `${name}님이 로그인했습니다.`;
-        if (isNotificationPopupEnabled() && window.electronAPI?.showNotification) {
-          window.electronAPI.showNotification(title, body);
-        } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
-          new Notification(title, { body });
-        }
-      }
+      // 다른 사용자 로그인 팝업 알림은 업무 방해 민원으로 제거함 (온라인 상태 표시는 그대로 유지).
     });
     s.on('user_presence', (payload: {
       userId?: string;
