@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { orgApi, memosApi, type OrgUser } from '../api';
 import { useAuthStore, useThemeStore, useToastStore } from '../store';
 import UIButton from './ui/UIButton';
-import UITextInput from './ui/UITextInput';
 import UIModal from './ui/UIModal';
 import ModalFooter from './ui/ModalFooter';
 import { cn } from '../utils/cn';
@@ -22,7 +21,6 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
   const [selected, setSelected] = useState<Set<string>>(() => new Set(initialRecipientIds));
   const [searchQuery, setSearchQuery] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [loading, setLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -82,25 +80,22 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
   };
 
   const handleSend = async () => {
-    const trimmedSubject = subject.trim();
     const trimmedBody = body.trim();
     if (selected.size === 0) {
       showToast('받는 사람을 선택해 주세요.', 'error');
-      return;
-    }
-    if (!trimmedSubject) {
-      showToast('제목을 입력해 주세요.', 'error');
       return;
     }
     if (!trimmedBody) {
       showToast('내용을 입력해 주세요.', 'error');
       return;
     }
+    // 제목 입력란을 없앤 대신, 쪽지함 목록에 쓸 제목을 본문 첫 줄에서 자동으로 뽑는다.
+    const autoSubject = trimmedBody.split('\n')[0].slice(0, 60) || '(제목 없음)';
     setLoading(true);
     try {
       await memosApi.send({
         recipientIds: [...selected],
-        subject: trimmedSubject,
+        subject: autoSubject,
         body: trimmedBody,
       });
       showToast('쪽지를 보냈습니다.', 'success');
@@ -251,11 +246,6 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
               {selectedUsers.length}명 선택됨
             </div>
           )}
-        </div>
-
-        <div>
-          <div className={cn('mb-1.5 text-xs font-semibold', isDark ? 'text-slate-300' : 'text-slate-600')}>제목</div>
-          <UITextInput value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="제목" />
         </div>
 
         <div>
