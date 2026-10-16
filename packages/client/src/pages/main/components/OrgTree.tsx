@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
-import type { OrgCompany, OrgDepartment, OrgGroup, OrgUser } from '../../../api';
+import { orgApi, type OrgCompany, type OrgDepartment, type OrgGroup, type OrgUser } from '../../../api';
 import type { OnlinePresenceMap } from '../../../utils/presence';
 import { cn } from '../../../utils/cn';
-import { allOrgUsers, companyUsers, defaultOpenDepartmentIds, departmentUsers, displayDepartmentUserCount, formatJobTitle } from '../../../utils/orgTree';
+import { allOrgUsers, companyUsers, defaultOpenDepartmentIds, departmentUsers, displayDepartmentUserCount, flattenDepartments, formatJobTitle } from '../../../utils/orgTree';
 import { getOrgTheme, type OrgThemeId } from '../../../utils/orgTheme';
 
 const ACTIVE_BLUE = '#5B8DEF';
@@ -354,6 +354,29 @@ function OrgTree({
     });
   };
 
+  /**
+   * 부서/회사 "전체 선택"용: 접혀서 아직 지연 로드가 안 된 부서는 users가 비어 있으므로,
+   * 그 부서들만 GET /org/departments/:id/users로 따로 받아와 합친 뒤 완전한 인원 목록을 돌려준다.
+   * (펼쳐본 부서만 선택되고 나머지는 빠지는 문제 방지 — usersLoaded===false인 부서만 추가 조회)
+   */
+  const resolveAllUsers = async (departments: OrgDepartment[]): Promise<OrgUser[]> => {
+    const flat = flattenDepartments(departments);
+    const byId = new Map<string, OrgUser>();
+    const toFetch = flat.filter((d) => d.usersLoaded === false);
+    if (toFetch.length > 0) {
+      const results = await Promise.all(
+        toFetch.map((d) => orgApi.departmentUsers(d.id).catch(() => [] as OrgUser[])),
+      );
+      results.forEach((users) => users.forEach((u) => byId.set(u.id, u)));
+    }
+    const fetchedDeptIds = new Set(toFetch.map((d) => d.id));
+    flat.forEach((d) => {
+      if (fetchedDeptIds.has(d.id)) return;
+      (d.users ?? []).forEach((u) => byId.set(u.id, u));
+    });
+    return [...byId.values()];
+  };
+
   const usersById = (() => {
     const map = new Map<string, OrgUser>();
     if (view === 'groups') {
@@ -639,17 +662,21 @@ function OrgTree({
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            const users = departmentUsers(dept);
-            if (users.length === 0) return;
-            toggleSelectMany(users.map((u) => u.id), true);
-            onUserContextMenu(e, users[0], { selectedUsers: users });
+            void resolveAllUsers([dept]).then((users) => {
+              if (users.length === 0) return;
+              toggleSelectMany(users.map((u) => u.id), true);
+              onUserContextMenu(e, users[0], { selectedUsers: users });
+            });
           }}
         >
           <ExpandBox isDark={isDark} open={deptOpen} onClick={() => onToggleTree(deptKey)} />
           <input
             type="checkbox"
             checked={deptAllSelected}
-            onChange={(e) => toggleSelectMany(deptIds, e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              void resolveAllUsers([dept]).then((users) => toggleSelectMany(users.map((u) => u.id), checked));
+            }}
             className="h-3.5 w-3.5 cursor-pointer accent-brand"
             style={useCustomAccent ? { accentColor: orgTheme.accent } : undefined}
           />
@@ -751,7 +778,10 @@ function OrgTree({
               <input
                 type="checkbox"
                 checked={companyAllSelected}
-                onChange={(e) => toggleSelectMany(companyUserIds, e.target.checked)}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  void resolveAllUsers(rootDepts).then((users) => toggleSelectMany(users.map((u) => u.id), checked));
+                }}
                 className="h-3.5 w-3.5 cursor-pointer accent-brand"
                 style={useCustomAccent ? { accentColor: orgTheme.accent } : undefined}
               />
