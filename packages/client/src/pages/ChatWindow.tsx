@@ -1141,16 +1141,16 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
               className={cn(
                 'py-2.5 px-5 rounded-full font-bold text-sm cursor-pointer whitespace-nowrap transition-colors',
                 isCompactHeader && 'px-3.5 py-2',
-                !input.trim() || !socket || fileUploading
+                (!input.trim() && pendingFiles.length === 0) || !socket || fileUploading
                   ? (isDark ? 'bg-slate-700 text-slate-400 opacity-90' : 'bg-slate-300 text-white opacity-90')
                   : (useCustomAccent ? 'text-white' : 'bg-brand-dark text-white'),
               )}
               style={
-                useCustomAccent && (input.trim() && socket && !fileUploading)
+                useCustomAccent && ((input.trim() || pendingFiles.length > 0) && socket && !fileUploading)
                   ? { background: orgTheme.accent }
                   : undefined
               }
-              disabled={!input.trim() || !socket || fileUploading}
+              disabled={(!input.trim() && pendingFiles.length === 0) || !socket || fileUploading}
             >
               {editingMsg ? '수정' : '전송'}
             </button>
