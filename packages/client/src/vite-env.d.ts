@@ -30,6 +30,7 @@ interface Window {
     windowResize: (width: number, height: number) => Promise<void>;
     setWindowUiMode?: (mode: 'login' | 'main', width?: number, height?: number) => Promise<{ ok?: boolean }>;
     appQuit?: () => Promise<void>;
+    clearAppCache?: () => Promise<void>;
     onLogout: (handler: () => void) => () => void;
     onNavigateToRoom: (handler: (roomId: string) => void) => () => void;
     getAppVersion: () => Promise<string>;

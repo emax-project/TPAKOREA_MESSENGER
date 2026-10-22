@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -656,6 +656,18 @@ ipcMain.handle('app-quit', () => {
   app.quit();
 });
 
+async function clearAppCache() {
+  try {
+    const ses = session.defaultSession;
+    await ses.clearCache();
+    await ses.clearStorageData({ storages: ['cachestorage', 'serviceworkers'] });
+  } catch (err) {
+    console.error('[clearAppCache]', err);
+  }
+}
+
+ipcMain.handle('clear-app-cache', () => clearAppCache());
+
 ipcMain.handle('window-resize', (event, width, height) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win && typeof width === 'number' && typeof height === 'number') {
@@ -1040,6 +1052,8 @@ app.whenReady().then(() => {
 
 app.on('before-quit', (e) => {
   if (!isQuitting) isQuitting = true;
+  // 종료 후 디스크에 대화·쪽지·조직도 캐시가 남지 않도록 정리(완료를 기다리지 않는 best-effort)
+  clearAppCache();
   // 업데이트 대기 중이면 quitAndInstall로 설치 후 재시작 (한 번에 적용)
   if (updateDownloadedPending && app.isPackaged && !isDev) {
     updateDownloadedPending = false;

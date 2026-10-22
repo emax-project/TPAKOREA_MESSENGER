@@ -39,6 +39,7 @@ export const useAuthStore = create<AuthState>()(
         authApi.logout().catch(() => {});
         localStorage.removeItem('token');
         clearSessionDate();
+        window.electronAPI?.clearAppCache?.().catch(() => {});
         set({ user: null, token: null, mustChangePassword: false });
       },
     }),

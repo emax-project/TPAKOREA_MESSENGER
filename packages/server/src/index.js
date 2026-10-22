@@ -62,6 +62,13 @@ httpServer.headersTimeout = 35000;  // requestTimeout보다 약간 크게
 app.use(cors({ origin: true }));
 app.use(express.json());
 
+// 기본적으로 모든 응답은 디스크·브라우저 캐시에 남기지 않음(대화·쪽지·조직도 등 민감정보 보호).
+// 공개 이미지(아바타, 링크 미리보기)처럼 캐싱이 필요한 라우트는 각자 Cache-Control을 뒤에서 덮어씀.
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 // Public avatar endpoints (no auth required, used by <img> / <Image> tags)
 app.get('/users/:id/avatar', async (req, res) => {
   try {
