@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { authApi, type User } from './api';
-import { clearSessionDate, isSessionFromToday, markSessionToday } from './utils/authSession';
+import { clearSessionDate, getActiveToken, markSessionToday, removeStoredToken, setStoredToken } from './utils/authSession';
 import type { OrgThemeId } from './utils/orgTheme';
 
 type AuthState = {
@@ -21,10 +21,10 @@ export const useAuthStore = create<AuthState>()(
       mustChangePassword: false,
       setAuth: (user, token, opts) => {
         if (token) {
-          localStorage.setItem('token', token);
+          setStoredToken(token);
           markSessionToday();
         } else {
-          localStorage.removeItem('token');
+          removeStoredToken();
           clearSessionDate();
         }
         set((s) => ({
@@ -37,7 +37,7 @@ export const useAuthStore = create<AuthState>()(
       setMustChangePassword: (value) => set({ mustChangePassword: value }),
       logout: () => {
         authApi.logout().catch(() => {});
-        localStorage.removeItem('token');
+        removeStoredToken();
         clearSessionDate();
         window.electronAPI?.clearAppCache?.().catch(() => {});
         set({ user: null, token: null, mustChangePassword: false });
@@ -45,14 +45,18 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth',
+      // token은 암호화 저장소(authSession)가 단일 소스 — localStorage에 평문으로
+      // 남기지 않도록 persist 대상에서 제외한다.
+      partialize: (state) => ({ user: state.user, mustChangePassword: state.mustChangePassword }),
       merge: (persisted, current) => {
-        const saved = persisted as AuthState | undefined;
-        if (saved?.token && !isSessionFromToday()) {
-          localStorage.removeItem('token');
+        const saved = persisted as Partial<AuthState> | undefined;
+        const activeToken = getActiveToken();
+        if (!activeToken) {
+          removeStoredToken();
           clearSessionDate();
-          return { ...current, user: null, token: null, mustChangePassword: false };
+          return { ...current, ...saved, user: null, token: null, mustChangePassword: false };
         }
-        return { ...current, ...saved };
+        return { ...current, ...saved, token: activeToken };
       },
     }
   )

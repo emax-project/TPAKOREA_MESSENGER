@@ -39,6 +39,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWindowUiMode: (mode, width, height) => ipcRenderer.invoke('window-set-ui-mode', mode, width, height),
   appQuit: () => ipcRenderer.invoke('app-quit'),
   clearAppCache: () => ipcRenderer.invoke('clear-app-cache'),
+  readTokenSync: () => {
+    try {
+      return ipcRenderer.sendSync('token-read-sync');
+    } catch {
+      return null;
+    }
+  },
+  writeToken: (token) => ipcRenderer.invoke('token-write', token),
+  clearToken: () => ipcRenderer.invoke('token-clear'),
   onLogout: (handler) => {
     const listener = () => handler();
     ipcRenderer.on('tray-logout', listener);

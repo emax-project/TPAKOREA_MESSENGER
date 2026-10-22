@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog, session } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog, session, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -24,6 +24,48 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 }
+
+// 로그인 토큰을 OS 암호화 API(Windows DPAPI/macOS Keychain 기반 safeStorage)로
+// 암호화해 저장 — 평문 localStorage 저장을 대체한다.
+const TOKEN_FILE = path.join(app.getPath('userData'), 'token.enc');
+
+function readTokenFile() {
+  try {
+    if (!safeStorage.isEncryptionAvailable() || !fs.existsSync(TOKEN_FILE)) return null;
+    return safeStorage.decryptString(fs.readFileSync(TOKEN_FILE));
+  } catch (err) {
+    console.error('[token] read failed', err);
+    return null;
+  }
+}
+
+function writeTokenFile(token) {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    fs.writeFileSync(TOKEN_FILE, safeStorage.encryptString(token));
+    return true;
+  } catch (err) {
+    console.error('[token] write failed', err);
+    return false;
+  }
+}
+
+function clearTokenFile() {
+  try {
+    if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE);
+  } catch (err) {
+    console.error('[token] clear failed', err);
+  }
+}
+
+ipcMain.on('token-read-sync', (event) => {
+  event.returnValue = readTokenFile();
+});
+ipcMain.handle('token-write', (_e, token) => writeTokenFile(token));
+ipcMain.handle('token-clear', () => {
+  clearTokenFile();
+  return true;
+});
 
 const NOTIF_WIDTH = 360;
 const NOTIF_HEIGHT = 100;
