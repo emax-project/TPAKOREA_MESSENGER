@@ -84,3 +84,16 @@ export function removeStoredToken(): void {
     /* ignore */
   }
 }
+
+/**
+ * 로그인 시 접속 서버 주소를 메인 프로세스에 알려 둔다. fetch-user-avatar 같은
+ * 토큰을 들고 나가는 IPC가, 화면 쪽에서 매 호출마다 넘기는 임의 주소를 믿지 않고
+ * 이 값만 쓰도록 하기 위함(렌더러가 엉뚱한 주소로 토큰을 보내게 하는 것 방지).
+ */
+export function setTrustedBaseUrl(baseUrl: string): void {
+  try {
+    window.electronAPI?.setTrustedBaseUrl?.(baseUrl).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}

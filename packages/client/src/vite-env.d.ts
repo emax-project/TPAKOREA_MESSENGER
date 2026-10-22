@@ -34,6 +34,7 @@ interface Window {
     readTokenSync?: () => string | null;
     writeToken?: (token: string) => Promise<boolean>;
     clearToken?: () => Promise<boolean>;
+    setTrustedBaseUrl?: (url: string) => Promise<boolean>;
     onLogout: (handler: () => void) => () => void;
     onNavigateToRoom: (handler: (roomId: string) => void) => () => void;
     getAppVersion: () => Promise<string>;
@@ -51,7 +52,7 @@ interface Window {
     quitAndInstall: () => Promise<{ success?: boolean; requiresManualInstall?: boolean; error?: string }>;
     openUpdateDownload: (version?: string | null) => Promise<void>;
     onUpdateDownloaded: (handler: () => void) => () => void;
-    fetchUserAvatar: (userId: string, baseUrl: string, token: string) => Promise<string | null>;
+    fetchUserAvatar: (userId: string) => Promise<string | null>;
     fetchRoomAvatar?: (roomId: string, baseUrl: string, token: string) => Promise<string | null>;
     setAlwaysOnTop?: (flag: boolean) => Promise<{ ok?: boolean; alwaysOnTop?: boolean }>;
     getAlwaysOnTop?: () => Promise<{ alwaysOnTop?: boolean }>;

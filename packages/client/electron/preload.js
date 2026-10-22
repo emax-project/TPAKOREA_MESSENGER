@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   writeToken: (token) => ipcRenderer.invoke('token-write', token),
   clearToken: () => ipcRenderer.invoke('token-clear'),
+  setTrustedBaseUrl: (url) => ipcRenderer.invoke('set-trusted-base-url', url),
   onLogout: (handler) => {
     const listener = () => handler();
     ipcRenderer.on('tray-logout', listener);
@@ -69,7 +70,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update-downloaded', listener);
     return () => ipcRenderer.removeListener('update-downloaded', listener);
   },
-  fetchUserAvatar: (userId, baseUrl, token) => ipcRenderer.invoke('fetch-user-avatar', { userId, baseUrl, token }),
+  fetchUserAvatar: (userId) => ipcRenderer.invoke('fetch-user-avatar', { userId }),
   setAlwaysOnTop: (flag) => ipcRenderer.invoke('window-set-always-on-top', flag),
   getAlwaysOnTop: () => ipcRenderer.invoke('window-get-always-on-top'),
   getDownloadPath: () => ipcRenderer.invoke('get-download-path'),

@@ -58,12 +58,35 @@ function clearTokenFile() {
   }
 }
 
+// 아바타 등 토큰을 들고 나가는 요청이 렌더러가 부르는 임의 주소로 가지 않도록,
+// 로그인마다 "신뢰할 서버 주소"를 메인 프로세스가 직접 기억해 둔다(민감정보 아님, 평문 저장).
+const BASE_URL_FILE = path.join(app.getPath('userData'), 'base-url.txt');
+let trustedBaseUrl = null;
+try {
+  if (fs.existsSync(BASE_URL_FILE)) trustedBaseUrl = fs.readFileSync(BASE_URL_FILE, 'utf8').trim() || null;
+} catch {
+  trustedBaseUrl = null;
+}
+
+ipcMain.handle('set-trusted-base-url', (_e, url) => {
+  if (typeof url !== 'string' || !isAllowedExternalProtocol(url)) return false;
+  trustedBaseUrl = url;
+  try {
+    fs.writeFileSync(BASE_URL_FILE, url, 'utf8');
+  } catch (err) {
+    console.error('[baseUrl] write failed', err);
+  }
+  return true;
+});
+
 ipcMain.on('token-read-sync', (event) => {
   event.returnValue = readTokenFile();
 });
 ipcMain.handle('token-write', (_e, token) => writeTokenFile(token));
 ipcMain.handle('token-clear', () => {
   clearTokenFile();
+  trustedBaseUrl = null;
+  try { if (fs.existsSync(BASE_URL_FILE)) fs.unlinkSync(BASE_URL_FILE); } catch { /* ignore */ }
   return true;
 });
 
@@ -310,6 +333,7 @@ function showCustomNotification(title, body, options) {
   });
 
   win.setMenu(null);
+  attachNavigationGuards(win);
   try {
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -410,6 +434,31 @@ function loadRoute(win, routePath) {
   }
 }
 
+function isAllowedExternalProtocol(url) {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// 새 창 열기(window.open)·페이지 이동(will-navigate)을 앱 자체 콘텐츠로만 제한한다.
+// http/https 링크는 새 창/이동 대신 OS 기본 브라우저로 열고, 그 외(file:// 등)는 차단.
+function attachNavigationGuards(win) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalProtocol(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url === win.webContents.getURL()) return;
+    const isAppContent = (isDev && url.startsWith('http://localhost:5173')) || url.startsWith('file://');
+    if (isAppContent) return;
+    event.preventDefault();
+    if (isAllowedExternalProtocol(url)) shell.openExternal(url);
+  });
+}
+
 function createWindow(options = {}) {
   const { secondWindow, initialRoute, ...browserWindowOptions } = options;
   const isMac = process.platform === 'darwin';
@@ -444,6 +493,8 @@ function createWindow(options = {}) {
     },
     ...browserWindowOptions,
   });
+
+  attachNavigationGuards(win);
 
   const url = getLoadURL();
   const file = getLoadFile();
@@ -501,14 +552,14 @@ function createWindow(options = {}) {
     }
   });
 
-  // F12로 DevTools 열기 (디버깅용)
+  // F12로 DevTools 열기 (개발 빌드에서만 — 운영 빌드에서는 비활성)
   win.webContents.on('before-input-event', (event, input) => {
-    if (input.key === 'F12' && input.type === 'keyDown') {
+    if (isDev && input.key === 'F12' && input.type === 'keyDown') {
       win.webContents.toggleDevTools();
     }
   });
 
-  if (process.argv.includes('--devtools')) {
+  if (isDev && process.argv.includes('--devtools')) {
     win.webContents.once('dom-ready', () => win.webContents.openDevTools());
   }
 
@@ -880,7 +931,7 @@ ipcMain.on('notification-clicked', () => {
 });
 
 ipcMain.handle('open-external', (_, url) => {
-  if (url && typeof url === 'string') shell.openExternal(url);
+  if (typeof url === 'string' && isAllowedExternalProtocol(url)) shell.openExternal(url);
 });
 
 // 설정 화면에서 업데이트 확인/설치용 IPC
@@ -959,10 +1010,15 @@ ipcMain.handle('set-title-bar-theme', (_, { isDark }) => {
 });
 
 // CORS 우회: 메인 프로세스에서 사용자 아바타 fetch (Electron file:// 환경)
-ipcMain.handle('fetch-user-avatar', async (_, { userId, baseUrl, token }) => {
-  if (!userId || !baseUrl || !token) return null;
+// 토큰·주소 모두 렌더러가 매 호출마다 보내는 값을 쓰지 않고, 로그인 시 저장해 둔
+// 암호화 토큰·신뢰 서버 주소를 직접 쓴다 — 렌더러가 임의 주소를 넘겨도 토큰이
+// 그 주소로 새 나가지 않도록 함.
+ipcMain.handle('fetch-user-avatar', async (_, { userId }) => {
+  if (!userId || !trustedBaseUrl) return null;
+  const token = readTokenFile();
+  if (!token) return null;
   try {
-    const url = `${String(baseUrl).replace(/\/$/, '')}/users/${userId}/avatar`;
+    const url = `${trustedBaseUrl.replace(/\/$/, '')}/users/${userId}/avatar`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
@@ -1055,7 +1111,8 @@ app.whenReady().then(() => {
     { role: 'appMenu' },
     { role: 'fileMenu' },
     { role: 'editMenu' },
-    {
+    // 개발용 메뉴 — 운영 빌드에는 포함하지 않음
+    ...(isDev ? [{
       label: '테스트',
       submenu: [
         {
@@ -1063,7 +1120,7 @@ app.whenReady().then(() => {
           click: openSecondWindow,
         },
       ],
-    },
+    }] : []),
     {
       label: '도움말',
       submenu: [
