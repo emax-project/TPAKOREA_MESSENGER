@@ -638,6 +638,9 @@ export const appSettingsApi = {
   getMailSite: () => api.get('/settings/mail-site') as Promise<{ url: string }>,
   putMailSite: (url: string) =>
     api.put('/settings/mail-site', { url }) as Promise<{ url: string }>,
+  getGroupwareUrl: () => api.get('/settings/groupware-url') as Promise<{ url: string }>,
+  putGroupwareUrl: (url: string) =>
+    api.put('/settings/groupware-url', { url }) as Promise<{ url: string }>,
 };
 
 export const announcementApi = {

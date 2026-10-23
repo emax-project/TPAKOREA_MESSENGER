@@ -9,6 +9,7 @@ settingsRouter.use(authMiddleware);
 
 const EXTERNAL_SITE_KEY = 'external_site_url';
 const MAIL_SITE_KEY = 'mail_site_url';
+const GROUPWARE_URL_KEY = 'groupware_url';
 
 // 이 값은 클라이언트가 window.open/openExternal로 "열기"만 하는 용도입니다.
 // 서버가 이 URL을 직접 fetch/요청하는 기능을 추가할 경우 SSRF가 될 수 있으므로,
@@ -86,3 +87,5 @@ function registerLinkSetting(path, key, label) {
 registerLinkSetting('/external-site', EXTERNAL_SITE_KEY, '링크');
 /** 사이드바 "메일" 버튼 주소 (비어 있으면 클라이언트가 그룹웨어로 연다) */
 registerLinkSetting('/mail-site', MAIL_SITE_KEY, '메일 링크');
+/** 사이드바 "그룹웨어" 버튼 주소 (비어 있으면 버튼이 동작하지 않는다) */
+registerLinkSetting('/groupware-url', GROUPWARE_URL_KEY, '그룹웨어');

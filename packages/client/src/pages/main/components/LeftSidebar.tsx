@@ -6,19 +6,6 @@ import {
   electronNoDragStyle,
   isMacElectron,
 } from '../../../utils/electronChrome';
-import { openGroupware } from '../../../utils/groupware';
-
-/** 메일 버튼: 관리자가 지정한 주소가 있으면 그곳을, 없으면 기존처럼 그룹웨어를 연다. */
-function openMailSite(url?: string) {
-  const target = url?.trim();
-  if (!target) {
-    openGroupware();
-    return;
-  }
-  const openExternal = window.electronAPI?.openExternal;
-  if (openExternal) void openExternal(target);
-  else window.open(target, '_blank', 'noopener,noreferrer');
-}
 import { cn } from '../../../utils/cn';
 import { useAuthStore, useThemeStore } from '../../../store';
 import { getBaseUrl, type UserAffiliation } from '../../../api';
@@ -51,6 +38,7 @@ type LeftSidebarProps = {
   onOpenExternalSite?: () => void;
   /** 관리자가 지정한 메일 주소. 비어 있으면 메일 버튼은 그룹웨어를 연다. */
   mailSiteUrl?: string;
+  onOpenGroupware?: () => void;
 };
 
 /**
@@ -120,6 +108,7 @@ function LeftSidebar({
   externalSiteUrl,
   onOpenExternalSite,
   mailSiteUrl,
+  onOpenGroupware,
 }: LeftSidebarProps) {
   const macDrag = isMacElectron();
   const user = useAuthStore((s) => s.user);
@@ -165,7 +154,7 @@ function LeftSidebar({
       <button
         type="button"
         style={{ ...btnStyle(false), ...(macDrag ? electronNoDragStyle : {}) }}
-        onClick={() => openGroupware()}
+        onClick={() => onOpenGroupware?.()}
         title="그룹웨어 바로가기"
         className={electronNoDragClass}
       >
@@ -200,7 +189,16 @@ function LeftSidebar({
         <button
           type="button"
           style={{ ...btnStyle(false), ...(macDrag ? electronNoDragStyle : {}) }}
-          onClick={() => openMailSite(mailSiteUrl)}
+          onClick={() => {
+            const target = mailSiteUrl?.trim();
+            if (!target) {
+              onOpenGroupware?.();
+              return;
+            }
+            const openExternal = window.electronAPI?.openExternal;
+            if (openExternal) void openExternal(target);
+            else window.open(target, '_blank', 'noopener,noreferrer');
+          }}
           title={mailSiteUrl ? `메일\n${mailSiteUrl}` : '메일'}
           className={electronNoDragClass}
         >

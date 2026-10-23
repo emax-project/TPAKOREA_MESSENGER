@@ -31,6 +31,7 @@ import { cn } from '../utils/cn';
 import { filterDepartments, flattenDepartments, defaultOpenDepartmentIds, companyUserCount, visibleOpenDepartmentIds } from '../utils/orgTree';
 import { presenceFromList, type OnlinePresenceMap } from '../utils/presence';
 import { openChatRoomWindow } from '../utils/chatPopout';
+import { openGroupware } from '../utils/groupware';
 
 const STATUS_OPTIONS = [
   { id: '온라인', label: '온라인' },
@@ -497,6 +498,12 @@ export default function Main() {
     enabled: !!token,
   });
   const mailSiteUrl = mailSiteSetting?.url?.trim() || '';
+  const { data: groupwareSetting } = useQuery({
+    queryKey: ['settings', 'groupware-url'],
+    queryFn: appSettingsApi.getGroupwareUrl,
+    enabled: !!token,
+  });
+  const groupwareUrl = groupwareSetting?.url?.trim() || (import.meta.env.VITE_GROUPWARE_URL || '').trim();
   const { data: events = [] } = useQuery<Event[]>({ queryKey: ['events'], queryFn: eventsApi.list, enabled: !!token });
   const { data: mentions = [] } = useQuery({ queryKey: ['mentions'], queryFn: mentionsApi.list, enabled: !!token && activePanel === 'notifications' });
   const { data: unreadMentionCount } = useQuery({ queryKey: ['mentions', 'unread-count'], queryFn: mentionsApi.unreadCount, enabled: !!token, refetchInterval: 30000 });
@@ -786,6 +793,19 @@ export default function Main() {
     const openExternal = window.electronAPI?.openExternal;
     if (openExternal) void openExternal(url);
     else window.open(url, '_blank', 'noopener,noreferrer');
+  };
+  const handleOpenGroupware = () => {
+    if (!groupwareUrl) {
+      showToast(
+        user?.isAdmin
+          ? '설정에서 그룹웨어 주소를 먼저 저장해 주세요'
+          : '관리자가 아직 그룹웨어 주소를 설정하지 않았습니다',
+        'error',
+      );
+      if (user?.isAdmin) setActivePanel('settings');
+      return;
+    }
+    openGroupware(groupwareUrl);
   };
   const handleSaveStatusProfile = async () => {
     try {
@@ -1199,6 +1219,7 @@ export default function Main() {
           externalSiteUrl={externalSiteUrl}
           onOpenExternalSite={handleOpenExternalSite}
           mailSiteUrl={mailSiteUrl}
+          onOpenGroupware={handleOpenGroupware}
         />
 
         <div className={cn('flex-1 min-h-0 min-w-0 flex flex-col', isDark ? 'bg-slate-900' : 'bg-white')}>

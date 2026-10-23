@@ -148,6 +148,15 @@ function AdminSection({ isDark, isNarrowLayout = false, currentUserId }: Props) 
         load={appSettingsApi.getMailSite}
         store={appSettingsApi.putMailSite}
       />
+      <SidebarLinkSettings
+        isDark={isDark}
+        queryKey="groupware-url"
+        title="그룹웨어"
+        description="왼쪽 사이드바 그룹웨어 버튼과 PC 메신저 홈 버튼이 이 주소를 엽니다. 비워 두면 버튼을 눌러도 동작하지 않습니다."
+        placeholder="https://gw.example.com"
+        load={appSettingsApi.getGroupwareUrl}
+        store={appSettingsApi.putGroupwareUrl}
+      />
 
       <div
         role="tablist"
