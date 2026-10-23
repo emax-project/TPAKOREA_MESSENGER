@@ -94,19 +94,34 @@ export function useMainSocket({
         const updatedFirst = { ...firstPage, messages: [withReadCount, ...(firstPage.messages ?? [])] };
         return { ...old, pages: [updatedFirst, ...old.pages.slice(1, 5)] };
       });
-      (async () => {
-        const myId = myIdRef.current;
-        if (!myId) return;
-        await queryClient.refetchQueries({ queryKey: ['rooms', myId] });
-        const rooms = queryClient.getQueryData<Room[]>(['rooms', myId]) ?? [];
-        const recent = recentTopicRoomRef.current;
-        const fixed =
-          recent && recent.id === msg.roomId && Date.now() - recent.at < 5000
-            ? rooms.map((r) => (r.id === recent.id ? { ...r, isTopic: true, isGroup: true } : r))
-            : rooms;
-        if (fixed !== rooms) queryClient.setQueryData(['rooms', myId], fixed);
-        if (recent?.id === msg.roomId) recentTopicRoomRef.current = null;
-      })();
+      // 대화방 목록 전체를 다시 불러오지 않고, 메시지가 온 방 1개만 로컬에서 갱신한다
+      // (메시지 수신마다 서버에 목록 전체를 재요청하면 서버 부하·화면 지연이 커짐).
+      // 목록에 아직 없는 방(막 초대된 경우 등)만 예외적으로 전체 재조회로 보충한다.
+      const myId = myIdRef.current;
+      if (myId) {
+        const rooms = queryClient.getQueryData<Room[]>(['rooms', myId]);
+        const idx = rooms?.findIndex((r) => r.id === msg.roomId) ?? -1;
+        if (!rooms || idx === -1) {
+          queryClient.refetchQueries({ queryKey: ['rooms', myId] });
+        } else {
+          const room = rooms[idx];
+          const isMine = msg.senderId === myId;
+          const recent = recentTopicRoomRef.current;
+          const becameTopic = !!recent && recent.id === msg.roomId && Date.now() - recent.at < 5000;
+          const updatedRoom: Room = {
+            ...room,
+            lastMessage: { id: msg.id, content: msg.content, createdAt: msg.createdAt, senderName: msg.sender?.name ?? '' },
+            updatedAt: msg.createdAt,
+            unreadCount: isMine ? room.unreadCount : (room.unreadCount ?? 0) + 1,
+            ...(becameTopic ? { isTopic: true, isGroup: true } : {}),
+          };
+          if (becameTopic) recentTopicRoomRef.current = null;
+          const next = rooms.slice();
+          next.splice(idx, 1);
+          next.unshift(updatedRoom);
+          queryClient.setQueryData(['rooms', myId], next);
+        }
+      }
       if (msg.senderId !== myIdRef.current) {
         if (notificationsSnoozedUntilRef.current > Date.now()) return;
         if (mutedRoomIdsRef.current.has(String(msg.roomId))) return;
@@ -182,14 +197,21 @@ export function useMainSocket({
     s.on('room_read', (payload: { roomId: string; userId: string }) => {
       const uid = myIdRef.current;
       if (payload.userId === uid) {
-        if (uid) queryClient.refetchQueries({ queryKey: ['rooms', uid] });
+        // 다른 기기에서 내가 읽음 — 목록 전체를 다시 불러올 필요 없이 그 방의
+        // 안 읽은 수만 0으로 로컬 반영한다.
+        if (uid) {
+          queryClient.setQueryData<Room[]>(['rooms', uid], (rooms) =>
+            rooms?.map((r) => (r.id === payload.roomId ? { ...r, unreadCount: 0 } : r)) ?? rooms
+          );
+        }
         return;
       }
+      // 상대가 내가 보낸 메시지를 읽음 — 대화창의 읽음 표시(readCount)만 갱신하면 되고
+      // 대화방 목록 자체는 바뀔 게 없어 재조회가 필요 없다.
       queryClient.setQueryData<InfiniteData<MessagesPage>>(['rooms', payload.roomId, 'messages'], (old) => {
         if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
         return { ...old, pages: old.pages.map((p) => ({ ...p, messages: (p.messages ?? []).map((m) => m.senderId === myIdRef.current ? { ...m, readCount: Math.max(m.readCount ?? 0, 1) } : m) })) };
       });
-      if (uid) queryClient.refetchQueries({ queryKey: ['rooms', uid] });
     });
     s.on('members_added', () => {
       const uid = myIdRef.current;
