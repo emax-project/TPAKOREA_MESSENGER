@@ -27,7 +27,7 @@
     "@tiptap/extension-placeholder": "^3.31.3",
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
-    "dompurify": "^3.3.1",
+    "dompurify": "^3.4.17",
     "electron-updater": "^6.7.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -70,7 +70,6 @@
   "build": {
     "appId": "com.tpakorea.message",
     "productName": "TPA-Korea",
-    "electronVersion": "33.2.0",
     "directories": {
       "output": "release"
     },
