@@ -3,6 +3,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
 import { filesApi, getBaseUrl, getSocketUrl, navigateToLogin, type Message, type Room } from '../../../api';
+import { useMainSocketStore } from '../../../store';
 import { playNotificationSound } from '../../../utils/notificationSound';
 import {
   detectClientDevice,
@@ -263,11 +264,13 @@ export function useMainSocket({
       queryClient.refetchQueries({ queryKey: ['rooms'] });
     });
     setSocket(s);
+    useMainSocketStore.getState().setMainSocket(s);
     return () => {
       s.removeAllListeners();
       s.disconnect();
       socketRef.current = null;
       setSocket(null);
+      useMainSocketStore.getState().setMainSocket(null);
       setSocketConnected(false);
     };
   }, [token, queryClient, myIdRef, recentTopicRoomRef, notificationsSnoozedUntilRef, mutedRoomIdsRef, setOnlineUserIds, setOnlinePresence, setSocket, setSocketConnected, socketRef]);

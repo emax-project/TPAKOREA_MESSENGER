@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { Socket } from 'socket.io-client';
 import { authApi, getBaseUrl, type User } from './api';
 import { clearSessionDate, getActiveToken, markSessionToday, removeStoredToken, setStoredToken, setTrustedBaseUrl } from './utils/authSession';
 import type { OrgThemeId } from './utils/orgTheme';
@@ -108,4 +109,18 @@ export const useToastStore = create<ToastState>()((set) => ({
     }, 3500);
   },
   remove: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+}));
+
+// 메인 창의 socket.io 연결 1개를 메인 창 안에서 공유하기 위한 저장소.
+// 대화창을 메인 창 "안"(임베디드)에서 열 때 이 연결을 재사용해, 같은 창 안에서
+// 소켓 연결이 중복 생성되는 걸 막는다. 팝업(별도) 대화창은 별도 프로세스라
+// 이 저장소를 공유할 수 없으므로 그쪽은 기존처럼 자체 연결을 유지한다.
+type MainSocketState = {
+  socket: Socket | null;
+  setMainSocket: (socket: Socket | null) => void;
+};
+
+export const useMainSocketStore = create<MainSocketState>()((set) => ({
+  socket: null,
+  setMainSocket: (socket) => set({ socket }),
 }));
