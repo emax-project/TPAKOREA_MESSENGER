@@ -721,6 +721,14 @@ export const filesApi = {
     return res.blob();
   },
   async download(messageId: string, filename?: string | null) {
+    // Electron: 메인 프로세스가 직접 받아 디스크에 스트리밍 저장 — 렌더러가 큰 파일을
+    // 통째로 메모리(blob)에 올리지 않는다.
+    if (window.electronAPI?.downloadFile) {
+      const result = await window.electronAPI.downloadFile(messageId, filename ?? undefined);
+      if (result?.ok || result?.error === 'CANCELED') return;
+      throw new Error('다운로드에 실패했습니다.');
+    }
+    // 웹(비 Electron) 폴백 — 브라우저 다운로드는 blob 경유가 불가피
     const res = await fetch(`${getBaseUrl()}/files/download/${messageId}`, {
       method: 'GET',
       headers: authHeaders(),
@@ -740,14 +748,6 @@ export const filesApi = {
         } catch {
           // keep filename from param
         }
-      }
-    }
-    if (window.electronAPI?.saveFileToDownloadPath && window.electronAPI.getDownloadPath) {
-      const pref = await window.electronAPI.getDownloadPath();
-      if (pref?.askSaveAs || pref?.path) {
-        const buf = await blob.arrayBuffer();
-        const saved = await window.electronAPI.saveFileToDownloadPath(buf, downloadName);
-        if (saved?.ok || saved?.error === 'CANCELED') return;
       }
     }
     const url = URL.createObjectURL(blob);

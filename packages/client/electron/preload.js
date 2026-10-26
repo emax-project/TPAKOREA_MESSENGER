@@ -77,5 +77,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pickDownloadPath: () => ipcRenderer.invoke('pick-download-path'),
   clearDownloadPath: () => ipcRenderer.invoke('clear-download-path'),
   setAskSaveAs: (flag) => ipcRenderer.invoke('set-ask-save-as', flag),
-  saveFileToDownloadPath: (buffer, filename) => ipcRenderer.invoke('save-file-to-download-path', { buffer, filename }),
+  downloadFile: (messageId, filename) => ipcRenderer.invoke('download-file-stream', { messageId, filename }),
 });

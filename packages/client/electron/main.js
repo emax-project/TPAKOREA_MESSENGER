@@ -2,6 +2,8 @@ const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dia
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const { pipeline } = require('node:stream/promises');
+const { Readable } = require('node:stream');
 
 // package.json의 "name"은 모든 브랜드 빌드(EMAX-Hub/CSIN-Tech/TPA-Korea 등)에서
 // "client"로 동일해서, setName()을 안 하면 app.getPath('userData')가 전부 같은
@@ -821,31 +823,51 @@ ipcMain.handle('pick-download-path', async (event) => {
 
 ipcMain.handle('clear-download-path', () => writeDownloadPref({ path: null }));
 
-ipcMain.handle('save-file-to-download-path', async (event, { buffer, filename }) => {
+// 첨부파일을 렌더러를 거치지 않고 메인 프로세스에서 직접 내려받아 디스크에 스트리밍
+// 저장한다 — 큰 파일을 통째로 메모리(blob/ArrayBuffer)에 올리지 않기 위함. 토큰·주소는
+// 렌더러가 보내는 값을 믿지 않고(아바타 요청과 동일한 이유) 로그인 시 저장해 둔
+// 암호화 토큰·신뢰 서버 주소를 그대로 쓴다.
+ipcMain.handle('download-file-stream', async (event, { messageId, filename }) => {
+  if (!messageId || !trustedBaseUrl) return { ok: false, error: 'NO_SERVER' };
+  const token = readTokenFile();
+  if (!token) return { ok: false, error: 'NO_TOKEN' };
+
   const pref = readDownloadPref();
   const safeName = String(filename || 'download').replace(/[\\/:*?"<>|]/g, '_');
   const win = BrowserWindow.fromWebContents(event.sender);
-  let target = null;
+  const defaultDir = pref.path || app.getPath('downloads');
+  let target;
   if (pref.askSaveAs) {
     const picked = await dialog.showSaveDialog(win || undefined, {
       title: '다른 이름으로 저장',
-      defaultPath: pref.path ? path.join(pref.path, safeName) : safeName,
+      defaultPath: path.join(defaultDir, safeName),
     });
     if (picked.canceled || !picked.filePath) return { ok: false, error: 'CANCELED' };
     target = picked.filePath;
-  } else if (pref.path) {
-    target = path.join(pref.path, safeName);
+  } else {
+    target = path.join(defaultDir, safeName);
     if (fs.existsSync(target)) {
       const ext = path.extname(safeName);
       const base = path.basename(safeName, ext);
-      target = path.join(pref.path, `${base}-${Date.now()}${ext}`);
+      target = path.join(defaultDir, `${base}-${Date.now()}${ext}`);
     }
-  } else {
-    return { ok: false, error: 'NO_PATH' };
   }
-  const data = Buffer.from(buffer);
-  fs.writeFileSync(target, data);
-  return { ok: true, path: target };
+
+  const url = `${trustedBaseUrl.replace(/\/$/, '')}/files/download/${messageId}`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok || !res.body) return { ok: false, error: `HTTP_${res.status}` };
+    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(target));
+    return { ok: true, path: target };
+  } catch (err) {
+    try {
+      if (fs.existsSync(target)) fs.unlinkSync(target); // 실패·취소 시 불완전 파일 정리
+    } catch {
+      // ignore
+    }
+    console.error('[download-file-stream]', err);
+    return { ok: false, error: err?.message || 'DOWNLOAD_FAILED' };
+  }
 });
 
 ipcMain.on('app-ready', (event) => {

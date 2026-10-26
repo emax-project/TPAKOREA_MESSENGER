@@ -60,6 +60,6 @@ interface Window {
     pickDownloadPath?: () => Promise<{ path: string | null; askSaveAs?: boolean; canceled?: boolean }>;
     clearDownloadPath?: () => Promise<{ path: string | null; askSaveAs?: boolean }>;
     setAskSaveAs?: (flag: boolean) => Promise<{ path: string | null; askSaveAs?: boolean }>;
-    saveFileToDownloadPath?: (buffer: ArrayBuffer | Uint8Array, filename: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    downloadFile?: (messageId: string, filename?: string | null) => Promise<{ ok: boolean; path?: string; error?: string }>;
   };
 }
