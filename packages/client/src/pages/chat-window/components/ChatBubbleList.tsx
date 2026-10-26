@@ -1,4 +1,5 @@
-import { useEffect, useState, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { Message, ReactionGroup, Room } from '../../../api';
 import EventCard from '../../../components/EventCard';
 import PollCard from '../../../components/PollCard';
@@ -9,10 +10,15 @@ import { cn } from '../../../utils/cn';
 import { formatDateLabel, getDateKey, isSystemMessage, renderMessageContent, HIDE_CONTEXT_ATTACH } from '../utils';
 import { getOrgTheme, type OrgThemeId } from '../../../utils/orgTheme';
 
+export type ChatBubbleListHandle = {
+  /** 맨 아래로 스크롤 (아래로 가기 버튼에서 사용) */
+  scrollToBottom: () => void;
+};
+
 type ChatBubbleListProps = {
+  /** 오래된 → 최신 순. 그대로 Virtuoso의 data로 쓰인다. */
   displayMessages: Message[];
   firstUnreadMessageId: string | null;
-  firstUnreadRef: RefObject<HTMLDivElement> | MutableRefObject<HTMLDivElement | null>;
   isDark: boolean;
   /** 내 메시지 말풍선 배경색 테마 (라이트 모드에서만 적용) */
   accentTheme?: OrgThemeId;
@@ -28,7 +34,18 @@ type ChatBubbleListProps = {
   setReplyTo: Dispatch<SetStateAction<Message | null>>;
   setEmojiPickerMsg: Dispatch<SetStateAction<string | null>>;
   handleReaction: (messageId: string, emoji: string) => void | Promise<void>;
+  /** 이전 페이지(과거 메시지) 로드 여부 판단용 — 늘어나면 맨 앞에 메시지가 추가된 것으로 본다 */
+  pageCount: number;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  onLoadMore: () => void;
+  onAtBottomStateChange: (atBottom: boolean) => void;
 };
+
+/** Virtuoso의 firstItemIndex는 "지금까지 맨 앞에서 몇 개가 늘었는지"를 역산할 수 있을 만큼
+ * 충분히 큰 값에서 시작해야 한다(공식 문서의 prepend 패턴) — 이 방 안에서 무한 스크롤로
+ * 불러올 수 있는 과거 메시지 총량보다 넉넉히 크면 된다. */
+const FIRST_ITEM_INDEX_START = 1_000_000;
 
 const isStandaloneSystemMessage = (message: Message) =>
   isSystemMessage(message.content) && !message.fileUrl && message.eventTitle == null && !message.poll;
@@ -85,10 +102,9 @@ function MessageActionButton({
   );
 }
 
-export default function ChatBubbleList({
+const ChatBubbleList = forwardRef<ChatBubbleListHandle, ChatBubbleListProps>(function ChatBubbleList({
   displayMessages,
   firstUnreadMessageId,
-  firstUnreadRef,
   isDark,
   accentTheme = 'default',
   myId,
@@ -103,7 +119,12 @@ export default function ChatBubbleList({
   setReplyTo,
   setEmojiPickerMsg,
   handleReaction,
-}: ChatBubbleListProps) {
+  pageCount,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
+  onAtBottomStateChange,
+}, ref) {
   const [alwaysShowActions, setAlwaysShowActions] = useState(false);
   // 내 메시지 말풍선 배경색 테마. 다크 모드는 대비 문제로 항상 기존 색 유지.
   const orgTheme = getOrgTheme(accentTheme);
@@ -128,9 +149,51 @@ export default function ChatBubbleList({
     };
   }, []);
 
-  return (
-    <>
-      {displayMessages.map((m, idx) => {
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_START);
+  const prevPageCountRef = useRef(pageCount);
+  const prevLengthRef = useRef(displayMessages.length);
+
+  // 과거 메시지 페이지가 추가로 로드돼 배열 맨 앞에 메시지가 붙은 경우에만
+  // firstItemIndex를 줄인다 — Virtuoso가 이 값으로 스크롤 위치를 알아서 보존한다
+  // (예전의 scrollHeight 수동 보정 로직을 대체).
+  useEffect(() => {
+    const addedCount = displayMessages.length - prevLengthRef.current;
+    if (pageCount > prevPageCountRef.current && addedCount > 0) {
+      setFirstItemIndex((v) => v - addedCount);
+    }
+    prevPageCountRef.current = pageCount;
+    prevLengthRef.current = displayMessages.length;
+  }, [pageCount, displayMessages.length]);
+
+  useImperativeHandle(ref, () => ({
+    scrollToBottom: () => {
+      if (displayMessages.length === 0) return;
+      virtuosoRef.current?.scrollToIndex({ index: displayMessages.length - 1, align: 'end', behavior: 'auto' });
+    },
+  }), [displayMessages.length]);
+
+  const jumpToMessage = (targetId: string) => {
+    const idx = displayMessages.findIndex((mm) => mm.id === targetId);
+    if (idx === -1) return;
+    setHighlightedMsgId(null);
+    virtuosoRef.current?.scrollToIndex({ index: idx, align: 'center', behavior: 'smooth' });
+    setTimeout(() => {
+      setHighlightedMsgId(targetId);
+      setTimeout(() => setHighlightedMsgId(null), 2000);
+    }, 400);
+  };
+
+  if (displayMessages.length === 0) return null;
+
+  const initialUnreadIndex = firstUnreadMessageId
+    ? displayMessages.findIndex((m) => m.id === firstUnreadMessageId)
+    : -1;
+  const initialTopMostItemIndex = initialUnreadIndex !== -1
+    ? { index: initialUnreadIndex, align: 'center' as const }
+    : displayMessages.length - 1;
+
+  const renderMessage = (m: Message, idx: number) => {
         const elements: React.ReactNode[] = [];
         const prevMsg = idx > 0 ? displayMessages[idx - 1] : null;
         const curDateKey = getDateKey(m.createdAt);
@@ -155,7 +218,7 @@ export default function ChatBubbleList({
         }
         if (m.id === firstUnreadMessageId) {
           elements.push(
-            <div key={`unread-${m.id}`} ref={firstUnreadRef} className="flex items-center justify-center py-2.5 px-4 mx-4 my-2 border-l-4 border-slate-900 rounded-lg animate-[unread-divider-pulse_2s_ease-in-out_3] bg-blue-500/10">
+            <div key={`unread-${m.id}`} className="flex items-center justify-center py-2.5 px-4 mx-4 my-2 border-l-4 border-slate-900 rounded-lg animate-[unread-divider-pulse_2s_ease-in-out_3] bg-blue-500/10">
               <span className={cn('text-xs font-semibold', isDark ? 'text-blue-100' : 'text-slate-900')}>
                 새 메시지
               </span>
@@ -274,31 +337,11 @@ export default function ChatBubbleList({
                     isMine ? 'mr-0' : 'ml-[42px]',
                     isDark ? 'bg-slate-700/70' : 'bg-slate-100/90',
                   )}
-                onClick={() => {
-                  const targetId = m.replyTo!.id;
-                  const el = document.getElementById(`msg-${targetId}`);
-                  if (el) {
-                    setHighlightedMsgId(null);
-                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    setTimeout(() => {
-                      setHighlightedMsgId(targetId);
-                      setTimeout(() => setHighlightedMsgId(null), 2000);
-                    }, 400);
-                  }
-                }}
+                onClick={() => jumpToMessage(m.replyTo!.id)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    const targetId = m.replyTo!.id;
-                    const el = document.getElementById(`msg-${targetId}`);
-                    if (el) {
-                      setHighlightedMsgId(null);
-                      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      setTimeout(() => {
-                        setHighlightedMsgId(targetId);
-                        setTimeout(() => setHighlightedMsgId(null), 2000);
-                      }, 400);
-                    }
+                    jumpToMessage(m.replyTo!.id);
                   }
                 }}
                 >
@@ -436,7 +479,38 @@ export default function ChatBubbleList({
           </div>
         );
         return elements;
-      })}
-    </>
+  };
+
+  return (
+    <Virtuoso
+      ref={virtuosoRef}
+      style={{ height: '100%' }}
+      className="overflow-x-hidden"
+      data={displayMessages}
+      computeItemKey={(_, m) => m.id}
+      // Virtuoso가 넘기는 index는 firstItemIndex만큼 오프셋돼 있어 displayMessages의
+      // 실제 배열 위치가 아니다 — 로컬 배열 인덱스로 되돌려야 renderMessage의
+      // prevMsg 조회(날짜 구분선·연속 메시지 묶음)가 정상 동작한다.
+      itemContent={(index, m) => <div className="px-5 pb-2.5">{renderMessage(m, index - firstItemIndex)}</div>}
+      firstItemIndex={firstItemIndex}
+      initialTopMostItemIndex={initialTopMostItemIndex}
+      followOutput={(isAtBottom) => {
+        const newestIsMine = displayMessages[displayMessages.length - 1]?.senderId === myId;
+        return (isAtBottom || newestIsMine) ? 'auto' : false;
+      }}
+      atBottomStateChange={onAtBottomStateChange}
+      startReached={() => {
+        if (hasNextPage && !isFetchingNextPage) onLoadMore();
+      }}
+      components={{
+        Header: () => isFetchingNextPage ? (
+          <div style={{ textAlign: 'center', padding: '8px 0', fontSize: 13, color: isDark ? '#64748b' : '#94a3b8' }}>
+            이전 메시지 불러오는 중...
+          </div>
+        ) : null,
+      }}
+    />
   );
-}
+});
+
+export default ChatBubbleList;

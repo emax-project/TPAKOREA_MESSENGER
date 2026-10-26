@@ -30,7 +30,7 @@ import { getOrgTheme } from '../utils/orgTheme';
 import { useChatSocket } from './chat-window/hooks/useChatSocket';
 import { useActiveChatPresence } from './chat-window/hooks/useActiveChatPresence';
 import { cn } from '../utils/cn';
-import ChatBubbleList from './chat-window/components/ChatBubbleList';
+import ChatBubbleList, { type ChatBubbleListHandle } from './chat-window/components/ChatBubbleList';
 import BoardMessageList from './chat-window/components/BoardMessageList';
 import ThreadPanel from './chat-window/components/ThreadPanel';
 
@@ -90,14 +90,15 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
   // 임베디드(모바일 셸)이거나 좁은 창에서는 컴팩트 헤더
   const isCompactHeader = embedded || viewportWidth < 980;
   const socketRef = useRef<Socket | null>(null);
+  // 보드뷰 전용 — 챗뷰는 ChatBubbleList 내부의 Virtuoso가 스크롤을 직접 관리한다
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
-  const firstUnreadRef = useRef<HTMLDivElement>(null);
   const initialScrollDoneRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const prevPageCountRef = useRef(0);
   const prevMsgCountRef = useRef(0);
+  const chatBubbleListRef = useRef<ChatBubbleListHandle>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const boardEditorRef = useRef<{ focus: () => void } | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -108,7 +109,11 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
     setShowScrollToBottom(!atBottom);
   };
   const scrollToBottom = () => {
-    messagesScrollRef.current?.scrollTo({ top: messagesScrollRef.current.scrollHeight, behavior: 'auto' });
+    if (isBoardView) {
+      messagesScrollRef.current?.scrollTo({ top: messagesScrollRef.current.scrollHeight, behavior: 'auto' });
+    } else {
+      chatBubbleListRef.current?.scrollToBottom();
+    }
   };
   const queryClient = useQueryClient();
 
@@ -275,16 +280,11 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
     const pagesLen = messagesInfinite?.pages?.length ?? 0;
     if (pagesLen > 1 && curCount > prevCount && curCount - prevCount >= 10) return;
 
-    // 초기 로드 시에만 진입 스크롤 (room + messages 준비 후)
+    // 초기 로드 시에만 진입 스크롤 (room + messages 준비 후) — 보드뷰 전용
+    // (챗뷰는 ChatBubbleList의 Virtuoso가 initialTopMostItemIndex로 안읽음/맨끝 위치를 직접 처리)
     if (curCount > 0 && !initialScrollDoneRef.current) {
       initialScrollDoneRef.current = true;
-      const run = () => {
-        if (firstUnreadMessageId && firstUnreadRef.current) {
-          firstUnreadRef.current.scrollIntoView({ behavior: 'auto', block: 'center' });
-        } else {
-          el.scrollTop = el.scrollHeight;
-        }
-      };
+      const run = () => { el.scrollTop = el.scrollHeight; };
       requestAnimationFrame(run);
       const t = setTimeout(run, 250);
       return () => clearTimeout(t);
@@ -772,60 +772,65 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
         <PinnedMessages roomId={roomId!} />
 
         <div className="relative flex-1 min-h-0 flex flex-col">
-          <div
-            ref={messagesScrollRef}
-            onScroll={checkAtBottom}
-            className={cn('flex-1 overflow-x-hidden overflow-y-auto py-4 px-5 flex flex-col gap-2.5', isDark ? 'bg-slate-900' : 'bg-white')}
-          >
-          <div ref={topSentinelRef} style={{ height: 1 }} />
-          {isFetchingNextPage && (
-            <div style={{ textAlign: 'center', padding: '8px 0', fontSize: 13, color: isDark ? '#64748b' : '#94a3b8' }}>
-              이전 메시지 불러오는 중...
+          {isBoardView ? (
+            <div
+              ref={messagesScrollRef}
+              onScroll={checkAtBottom}
+              className={cn('flex-1 overflow-x-hidden overflow-y-auto py-4 px-5 flex flex-col gap-2.5', isDark ? 'bg-slate-900' : 'bg-white')}
+            >
+              <div ref={topSentinelRef} style={{ height: 1 }} />
+              {isFetchingNextPage && (
+                <div style={{ textAlign: 'center', padding: '8px 0', fontSize: 13, color: isDark ? '#64748b' : '#94a3b8' }}>
+                  이전 메시지 불러오는 중...
+                </div>
+              )}
+              <BoardMessageList
+                rootPosts={rootPosts}
+                repliesMap={repliesMap}
+                isDark={isDark}
+                myId={myId}
+                room={room}
+                setContextMenu={setContextMenu}
+                showToast={showToast}
+                handleReaction={handleReaction}
+                boardCommentInputs={boardCommentInputs}
+                setBoardCommentInputs={setBoardCommentInputs}
+                socketRef={socketRef}
+                roomId={roomId}
+              />
+              <div ref={messagesEndRef} />
+            </div>
+          ) : (
+            /* ===== 채팅뷰: 기존 말풍선, 가상 스크롤(Virtuoso)로 렌더링 ===== */
+            <div className={cn('flex-1 min-h-0 py-4', isDark ? 'bg-slate-900' : 'bg-white')}>
+              <ChatBubbleList
+                key={roomId}
+                ref={chatBubbleListRef}
+                displayMessages={displayMessages}
+                firstUnreadMessageId={firstUnreadMessageId}
+                isDark={isDark}
+                accentTheme={accentTheme}
+                myId={myId}
+                room={room}
+                hoveredMsg={hoveredMsg}
+                highlightedMsgId={highlightedMsgId}
+                emojiPickerMsg={emojiPickerMsg}
+                setHoveredMsg={setHoveredMsg}
+                setHighlightedMsgId={setHighlightedMsgId}
+                setContextMenu={setContextMenu}
+                showToast={showToast}
+                setReplyTo={setReplyTo}
+                setEmojiPickerMsg={setEmojiPickerMsg}
+                handleReaction={handleReaction}
+                pageCount={messagesInfinite?.pages?.length ?? 0}
+                hasNextPage={!!hasNextPage}
+                isFetchingNextPage={isFetchingNextPage}
+                onLoadMore={handleLoadMore}
+                onAtBottomStateChange={(atBottom) => setShowScrollToBottom(!atBottom)}
+              />
             </div>
           )}
-          {isBoardView ? (
-            <BoardMessageList
-              rootPosts={rootPosts}
-              repliesMap={repliesMap}
-              isDark={isDark}
-              myId={myId}
-              room={room}
-              setContextMenu={setContextMenu}
-              showToast={showToast}
-              handleReaction={handleReaction}
-              boardCommentInputs={boardCommentInputs}
-              setBoardCommentInputs={setBoardCommentInputs}
-              socketRef={socketRef}
-              roomId={roomId}
-            />
-          )
-
-          /* ===== 채팅뷰: 기존 말풍선 ===== */
-          : (
-            <ChatBubbleList
-              displayMessages={displayMessages}
-              firstUnreadMessageId={firstUnreadMessageId}
-              firstUnreadRef={firstUnreadRef}
-              isDark={isDark}
-              accentTheme={accentTheme}
-              myId={myId}
-              room={room}
-              hoveredMsg={hoveredMsg}
-              highlightedMsgId={highlightedMsgId}
-              emojiPickerMsg={emojiPickerMsg}
-              setHoveredMsg={setHoveredMsg}
-              setHighlightedMsgId={setHighlightedMsgId}
-              setContextMenu={setContextMenu}
-              showToast={showToast}
-              setReplyTo={setReplyTo}
-              setEmojiPickerMsg={setEmojiPickerMsg}
-              handleReaction={handleReaction}
-            />
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-        {showScrollToBottom && (
+          {showScrollToBottom && (
           <button
             type="button"
             onClick={scrollToBottom}
