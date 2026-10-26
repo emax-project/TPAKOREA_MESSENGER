@@ -283,10 +283,17 @@ export function useChatSocket({
       );
     };
 
+    // 팝업 대화창은 자체 연결이라, 끊겼다 복구된 뒤 놓친 메시지를 직접 다시
+    // 불러와야 한다(메인 창 공유 소켓은 useMainSocket에서 따로 처리).
+    const handleReconnect = () => {
+      queryClient.invalidateQueries({ queryKey: ['rooms'] });
+    };
+
     if (ownsConnection) {
       s.on('connect_error', handleConnectError);
       s.on('error', handleError);
       s.on('connect', handleConnect);
+      s.io.on('reconnect', handleReconnect);
     } else if (s.connected) {
       s.emit('join_room', roomId);
     } else {
@@ -314,6 +321,7 @@ export function useChatSocket({
     return () => {
       if (ownsConnection) {
         s.removeAllListeners();
+        s.io.off('reconnect', handleReconnect);
         s.disconnect();
       } else {
         s.off('connect', handleConnect);

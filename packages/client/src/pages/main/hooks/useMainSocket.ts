@@ -77,6 +77,14 @@ export function useMainSocket({
     s.on('disconnect', () => {
       setSocketConnected(false);
     });
+    // 네트워크가 끊겼다 복구된 뒤에는 그 사이 놓친 메시지가 있을 수 있어
+    // 대화방 목록·현재 열려 있는 대화방의 메시지를 다시 불러온다. 열려 있지
+    // 않은 방 쿼리는 React Query가 그냥 stale 표시만 하고 실제 재요청은
+    // 안 하므로(비활성 쿼리), 불필요한 서버 부하 없이 보이는 것만 보정된다.
+    const handleReconnect = () => {
+      queryClient.invalidateQueries({ queryKey: ['rooms'] });
+    };
+    s.io.on('reconnect', handleReconnect);
     s.on('message', (msg: Message) => {
       const withReadCount = { ...msg, readCount: msg.readCount ?? 0 };
       queryClient.setQueryData<InfiniteData<MessagesPage>>(['rooms', msg.roomId, 'messages'], (old) => {
@@ -267,6 +275,7 @@ export function useMainSocket({
     useMainSocketStore.getState().setMainSocket(s);
     return () => {
       s.removeAllListeners();
+      s.io.off('reconnect', handleReconnect); // 'reconnect'는 소켓이 아니라 매니저(s.io)에 붙는 이벤트라 별도로 떼야 함
       s.disconnect();
       socketRef.current = null;
       setSocket(null);
