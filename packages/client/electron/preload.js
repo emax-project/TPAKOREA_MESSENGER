@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowResize: (width, height) => ipcRenderer.invoke('window-resize', width, height),
   setWindowUiMode: (mode, width, height) => ipcRenderer.invoke('window-set-ui-mode', mode, width, height),
   appQuit: () => ipcRenderer.invoke('app-quit'),
+  restartAfterCrash: () => ipcRenderer.invoke('restart-after-crash'),
   clearAppCache: () => ipcRenderer.invoke('clear-app-cache'),
   readTokenSync: () => {
     try {

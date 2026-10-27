@@ -30,6 +30,7 @@ interface Window {
     windowResize: (width: number, height: number) => Promise<void>;
     setWindowUiMode?: (mode: 'login' | 'main', width?: number, height?: number) => Promise<{ ok?: boolean }>;
     appQuit?: () => Promise<void>;
+    restartAfterCrash?: () => Promise<void>;
     clearAppCache?: () => Promise<void>;
     readTokenSync?: () => string | null;
     writeToken?: (token: string) => Promise<boolean>;

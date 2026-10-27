@@ -436,6 +436,53 @@ function loadRoute(win, routePath) {
   }
 }
 
+/** 창에 평소 앱 화면을 (다시) 띄운다 — 초기 진입과 크래시 복구 재시도 양쪽에서 쓴다. */
+function reloadWindowContent(win, initialRoute) {
+  if (initialRoute) {
+    loadRoute(win, initialRoute);
+    return;
+  }
+  const url = getLoadURL();
+  const file = getLoadFile();
+  if (url) win.loadURL(url);
+  else if (file) win.loadFile(file);
+}
+
+// 렌더러 반복 크래시를 진단할 수 있도록 사유·횟수만 기록한다(비밀번호·토큰·대화
+// 내용 등 민감정보는 이 이벤트 자체에 포함되지 않으므로 그대로 적어도 안전함).
+const CRASH_LOG_PATH = path.join(app.getPath('userData'), 'crash-log.jsonl');
+function logCrash(entry) {
+  try {
+    const line = JSON.stringify({ ...entry, at: new Date().toISOString() }) + '\n';
+    fs.appendFileSync(CRASH_LOG_PATH, line, 'utf8');
+    // 무한정 커지지 않도록 너무 크면(약 200KB 이상) 앞부분을 잘라낸다
+    const stat = fs.statSync(CRASH_LOG_PATH);
+    if (stat.size > 200_000) {
+      const lines = fs.readFileSync(CRASH_LOG_PATH, 'utf8').split('\n');
+      fs.writeFileSync(CRASH_LOG_PATH, lines.slice(-500).join('\n'), 'utf8');
+    }
+  } catch (err) {
+    console.error('[logCrash]', err);
+  }
+}
+
+function showCrashRecoveryScreen(win, count, reason) {
+  if (win.isDestroyed()) return;
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:40px;font-family:sans-serif;background:#fff;color:#1e293b;min-height:100vh;box-sizing:border-box;">
+      <h2 style="color:#dc2626">화면에 반복적으로 문제가 발생했습니다</h2>
+      <p>잠시 후 다시 시도해 주세요. 문제가 계속되면 아래 버튼 대신 앱을 완전히 종료했다가 다시 실행해 주세요.</p>
+      <p style="color:#64748b;font-size:13px;">반복 횟수: ${count}회 · 마지막 원인: ${String(reason).replace(/[<>&]/g, '')}</p>
+      <button id="__retry" style="margin-top:16px;padding:10px 20px;font-size:14px;border:none;border-radius:8px;background:#1e293b;color:#fff;cursor:pointer;">다시 시도</button>
+      <script>
+        document.getElementById('__retry').addEventListener('click', () => {
+          window.electronAPI && window.electronAPI.restartAfterCrash && window.electronAPI.restartAfterCrash();
+        });
+      </script>
+    </body></html>`;
+  win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+}
+
 function isAllowedExternalProtocol(url) {
   try {
     const { protocol } = new URL(url);
@@ -536,21 +583,21 @@ function createWindow(options = {}) {
     windowReadyHandlers.delete(webContentsId);
   });
 
-  // 렌더러 크래시 복구: 한 번만 자동 재로드
-  let crashed = false;
+  // 렌더러 크래시 복구: 처음 한 번은 조용히 자동 재시도하고, 반복되면(화면이 계속
+  // 비정상 종료되면) 더 이상 무한 반복하지 않고 안내 화면 + 다시 시도 버튼을 보여준다.
+  const MAX_SILENT_RELOADS = 1;
+  win.__emaxCrashCount = 0;
   win.webContents.on('render-process-gone', (event, details) => {
     console.error('[window] render-process-gone:', details.reason);
-    if (!crashed && details.reason !== 'clean-exit' && !win.isDestroyed()) {
-      crashed = true;
-      readyShown = false;
-      if (initialRoute) {
-        loadRoute(win, initialRoute);
-      } else {
-        const reloadUrl = getLoadURL();
-        const reloadFile = getLoadFile();
-        if (reloadUrl) win.loadURL(reloadUrl);
-        else if (reloadFile) win.loadFile(reloadFile);
-      }
+    if (details.reason === 'clean-exit' || win.isDestroyed()) return;
+    win.__emaxCrashCount += 1;
+    logCrash({ type: 'render-process-gone', reason: details.reason, exitCode: details.exitCode, count: win.__emaxCrashCount });
+    readyShown = false;
+    if (win.__emaxCrashCount <= MAX_SILENT_RELOADS) {
+      reloadWindowContent(win, initialRoute);
+    } else {
+      showWindow();
+      showCrashRecoveryScreen(win, win.__emaxCrashCount, details.reason);
     }
   });
 
@@ -749,6 +796,16 @@ ipcMain.handle('window-set-ui-mode', (event, mode, width, height) => {
 ipcMain.handle('app-quit', () => {
   isQuitting = true;
   app.quit();
+});
+
+// 반복 크래시 안내 화면의 '다시 시도' 버튼 — 그 창에 평소 앱 화면을 다시 띄우고
+// 크래시 횟수를 리셋해(수동 복구는 성공으로 간주) 다음 크래시도 조용한 자동
+// 재시도부터 다시 시작하게 한다.
+ipcMain.handle('restart-after-crash', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  win.__emaxCrashCount = 0;
+  reloadWindowContent(win, win.__emaxInitialRoute);
 });
 
 async function clearAppCache() {
