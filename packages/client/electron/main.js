@@ -392,6 +392,21 @@ let mainWindow = null;
 let isQuitting = false;
 let updateDownloadedPending = false;
 let pendingUpdateVersion = null;
+// 시작 시/30분 주기/설정화면 수동확인/메뉴 수동확인, 총 4곳에서 checkForUpdates()를
+// 부른다. autoDownload:true라 호출이 겹치면 같은 업데이트를 각자 또 받아버리므로,
+// 진행 중인 검사가 있으면 새로 시작하지 않고 그 Promise를 그대로 재사용한다.
+let updateCheckPromise = null;
+function safeCheckForUpdates() {
+  if (updateDownloadedPending) {
+    // 이미 다운로드까지 끝나 설치 대기 중 — 다시 받을 필요 없음
+    return Promise.resolve({ updateInfo: { version: pendingUpdateVersion } });
+  }
+  if (updateCheckPromise) return updateCheckPromise;
+  updateCheckPromise = autoUpdater.checkForUpdates().finally(() => {
+    updateCheckPromise = null;
+  });
+  return updateCheckPromise;
+}
 // TPA-Korea 빌드는 TPAKOREA_MESSENGER 저장소에 릴리즈된다 (build.publish와 동일한 저장소 —
 // 공개 MESSAGE 저장소를 가리키면 설치파일이 없어 404가 난다. 과거 자동 업데이트 피드 자체는
 // 고쳤지만, 이 수동 다운로드 링크는 그때 같이 안 고쳐져 있었음).
@@ -1019,7 +1034,7 @@ ipcMain.handle('check-for-updates', async () => {
     return { success: false, error: '개발 모드에서는 업데이트를 확인할 수 없습니다.' };
   }
   try {
-    const result = await autoUpdater.checkForUpdates();
+    const result = await safeCheckForUpdates();
     const v = result?.updateInfo?.version;
     const current = app.getVersion();
     const hasUpdate = Boolean(v && v !== current);
@@ -1148,7 +1163,7 @@ function setupAutoUpdate() {
   autoUpdater.on('error', (err) => {
     console.error('Auto-updater error:', err);
   });
-  autoUpdater.checkForUpdates()
+  safeCheckForUpdates()
     .then(() => {
       // 업데이트 확인 완료 (별도 처리 불필요)
     })
@@ -1159,7 +1174,7 @@ function setupAutoUpdate() {
   // 앱 실행 중 주기적 업데이트 확인 (30분마다)
   const CHECK_INTERVAL_MS = 30 * 60 * 1000;
   setInterval(() => {
-    autoUpdater.checkForUpdates().catch((err) => console.error('Update check failed:', err));
+    safeCheckForUpdates().catch((err) => console.error('Update check failed:', err));
   }, CHECK_INTERVAL_MS);
 }
 
@@ -1207,7 +1222,7 @@ app.whenReady().then(() => {
           label: '업데이트 확인',
           click: () => {
             if (!isDev && app.isPackaged) {
-              autoUpdater.checkForUpdates()
+              safeCheckForUpdates()
                 .then((r) => {
                   const v = r?.updateInfo?.version;
                   const current = app.getVersion();
