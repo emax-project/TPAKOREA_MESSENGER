@@ -24,6 +24,9 @@ interface Window {
     setOverlayIcon: (dataUrl: string | null) => Promise<void>;
     setTrayBadge?: (dataUrl: string | null) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    openGroupwareWindow?: (url: string) => Promise<boolean>;
+    setGroupwareCredentials?: (loginId: string, password: string) => Promise<boolean>;
+    clearGroupwareCredentials?: () => Promise<boolean>;
     windowClose: () => Promise<void>;
     windowMinimize: () => Promise<void>;
     windowMaximize: () => Promise<void>;

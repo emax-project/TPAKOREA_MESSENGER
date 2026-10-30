@@ -88,6 +88,189 @@ ipcMain.handle('token-clear', () => {
   return true;
 });
 
+// ── 그룹웨어 자동 로그인 ──────────────────────────────────────────────
+// 홈(그룹웨어) 버튼을 OS 기본 브라우저로 열면 메신저 로그인 정보가 전달되지 않아
+// 매번 그룹웨어에 다시 로그인해야 했다. 그룹웨어는 메신저와 같은 계정(LDAP uid)을
+// 쓰므로, 메신저 로그인 때 입력한 아이디·비밀번호를 OS 암호화 API(safeStorage)로
+// 보관했다가 앱 안의 그룹웨어 창에서 로그인 폼(#loginId/#password → checkLogin())을
+// 자동으로 채워 제출한다. 그룹웨어 세션 쿠키는 전용 파티션에 유지된다.
+const GW_CRED_FILE = path.join(app.getPath('userData'), 'gw-cred.enc');
+const GW_PARTITION = 'persist:groupware';
+let groupwareWin = null;
+
+function readGroupwareCredentials() {
+  try {
+    if (!safeStorage.isEncryptionAvailable() || !fs.existsSync(GW_CRED_FILE)) return null;
+    const parsed = JSON.parse(safeStorage.decryptString(fs.readFileSync(GW_CRED_FILE)));
+    if (typeof parsed?.loginId !== 'string' || typeof parsed?.password !== 'string') return null;
+    if (!parsed.loginId || !parsed.password) return null;
+    return parsed;
+  } catch (err) {
+    console.error('[groupware] credential read failed', err);
+    return null;
+  }
+}
+
+function writeGroupwareCredentials(loginId, password) {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    fs.writeFileSync(GW_CRED_FILE, safeStorage.encryptString(JSON.stringify({ loginId, password })));
+    return true;
+  } catch (err) {
+    console.error('[groupware] credential write failed', err);
+    return false;
+  }
+}
+
+async function clearGroupwareCredentials() {
+  try {
+    if (fs.existsSync(GW_CRED_FILE)) fs.unlinkSync(GW_CRED_FILE);
+  } catch (err) {
+    console.error('[groupware] credential clear failed', err);
+  }
+  // 메신저에서 로그아웃하면 그룹웨어 창·세션도 함께 정리한다(다른 사람이 같은 PC로 로그인하는 경우 대비).
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed() && w.__emaxGroupware) w.destroy();
+  });
+  groupwareWin = null;
+  try {
+    await session.fromPartition(GW_PARTITION).clearStorageData();
+  } catch (err) {
+    console.error('[groupware] session clear failed', err);
+  }
+  return true;
+}
+
+function safeOrigin(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+// 그룹웨어 로그인 화면이면 저장된 계정으로 한 번만 자동 제출한다.
+// 자동 제출 뒤에도 다시 로그인 화면이 뜨면(비밀번호 불일치 등) 반복하지 않고 사용자에게 맡긴다.
+function attachGroupwareAutoLogin(win, gwOrigin) {
+  let attempted = false;
+  win.webContents.on('did-finish-load', async () => {
+    if (win.isDestroyed()) return;
+    // 저장된 계정은 설정된 그룹웨어 주소(origin)에만 입력한다 — 다른 사이트로 새지 않게.
+    if (safeOrigin(win.webContents.getURL()) !== gwOrigin) return;
+    let hasForm = false;
+    try {
+      hasForm = await win.webContents.executeJavaScript(
+        "!!(document.getElementById('loginId') && document.getElementById('password'))",
+      );
+    } catch {
+      return;
+    }
+    if (!hasForm) {
+      attempted = false; // 로그인된 화면 — 이후 세션 만료로 로그인 화면이 다시 뜨면 재시도 허용
+      return;
+    }
+    if (attempted) return;
+    const cred = readGroupwareCredentials();
+    if (!cred) return;
+    attempted = true;
+    const script = `(() => {
+      const idEl = document.getElementById('loginId');
+      const pwEl = document.getElementById('password');
+      if (!idEl || !pwEl) return false;
+      const fill = (el, v) => {
+        el.focus();
+        el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      fill(idEl, ${JSON.stringify(cred.loginId)});
+      fill(pwEl, ${JSON.stringify(cred.password)});
+      if (typeof window.checkLogin === 'function') { window.checkLogin(); return true; }
+      const btn = document.querySelector('.login_button, button[type="submit"], input[type="submit"]');
+      if (btn) { btn.click(); return true; }
+      return false;
+    })()`;
+    try {
+      await win.webContents.executeJavaScript(script, true);
+    } catch (err) {
+      console.error('[groupware] auto login failed', err);
+    }
+  });
+}
+
+function createGroupwareWindow(url, gwOrigin) {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    minWidth: 800,
+    minHeight: 600,
+    autoHideMenuBar: true,
+    title: '그룹웨어',
+    ...(process.platform !== 'darwin' ? { icon: iconPath } : {}),
+    webPreferences: {
+      partition: GW_PARTITION,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  win.__emaxGroupware = true;
+
+  // 그룹웨어의 결재·인쇄 등 팝업은 같은 세션(로그인 유지)으로 앱 안에서 열고,
+  // 그 밖의 외부 주소는 OS 기본 브라우저로 넘긴다.
+  win.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (target === 'about:blank' || safeOrigin(target) === gwOrigin) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          autoHideMenuBar: true,
+          ...(process.platform !== 'darwin' ? { icon: iconPath } : {}),
+          webPreferences: { partition: GW_PARTITION, nodeIntegration: false, contextIsolation: true, sandbox: true },
+        },
+      };
+    }
+    if (isAllowedExternalProtocol(target)) shell.openExternal(target);
+    return { action: 'deny' };
+  });
+  win.webContents.on('did-create-window', (child) => {
+    child.__emaxGroupware = true;
+    attachGroupwareAutoLogin(child, gwOrigin);
+  });
+
+  attachGroupwareAutoLogin(win, gwOrigin);
+  win.on('closed', () => {
+    if (groupwareWin === win) groupwareWin = null;
+  });
+  win.loadURL(url);
+  return win;
+}
+
+ipcMain.handle('gw-credentials-set', (_e, payload) => {
+  const loginId = typeof payload?.loginId === 'string' ? payload.loginId.trim() : '';
+  const password = typeof payload?.password === 'string' ? payload.password : '';
+  if (!loginId || !password) return false;
+  return writeGroupwareCredentials(loginId, password);
+});
+ipcMain.handle('gw-credentials-clear', () => clearGroupwareCredentials());
+
+ipcMain.handle('open-groupware-window', (_e, url) => {
+  if (typeof url !== 'string' || !isAllowedExternalProtocol(url)) return false;
+  const gwOrigin = safeOrigin(url);
+  if (!gwOrigin) return false;
+  if (groupwareWin && !groupwareWin.isDestroyed() && safeOrigin(groupwareWin.webContents.getURL()) === gwOrigin) {
+    // 이미 열린 창은 그대로 앞으로 — 특정 경로를 요청한 경우에만 이동
+    const { pathname, search, hash } = new URL(url);
+    if ((pathname && pathname !== '/') || search || hash) groupwareWin.loadURL(url);
+    if (groupwareWin.isMinimized()) groupwareWin.restore();
+    groupwareWin.show();
+    groupwareWin.focus();
+    return true;
+  }
+  if (groupwareWin && !groupwareWin.isDestroyed()) groupwareWin.destroy();
+  groupwareWin = createGroupwareWindow(url, gwOrigin);
+  return true;
+});
+
 const NOTIF_WIDTH = 360;
 const NOTIF_HEIGHT = 100;
 const NOTIF_HEIGHT_PROGRESS = 128;

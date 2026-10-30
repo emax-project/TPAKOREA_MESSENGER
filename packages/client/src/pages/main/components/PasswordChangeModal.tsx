@@ -3,6 +3,8 @@ import { useAccentStyles } from '../../../hooks/useAccentStyles';
 import { cn } from '../../../utils/cn';
 import { authApi, type PasswordPolicy } from '../../../api';
 import UIModal from '../../../components/ui/UIModal';
+import { useAuthStore } from '../../../store';
+import { rememberGroupwareCredentials } from '../../../utils/groupware';
 
 const DEFAULT_POLICY: PasswordPolicy = {
   ldapEnabled: false,
@@ -75,6 +77,9 @@ export default function PasswordChangeModal({ isDark, onClose, onSuccess, forced
     setSaving(true);
     try {
       await authApi.changePassword(current, next);
+      // LDAP 계정은 그룹웨어와 공유되므로 자동 로그인용 비밀번호도 새 것으로 갱신
+      const email = useAuthStore.getState().user?.email;
+      if (email) rememberGroupwareCredentials(email, next);
       setDone(true);
       onSuccess?.();
       if (!forced) setTimeout(onClose, 1200);

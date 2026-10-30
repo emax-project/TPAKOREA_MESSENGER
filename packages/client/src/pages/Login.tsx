@@ -8,6 +8,7 @@ import UITextInput from '../components/ui/UITextInput';
 import { APP_MAX_WIDTH } from '../layout/constants';
 import { applyWindowPinClass, isMacElectron } from '../utils/electronChrome';
 import { isNotificationPopupEnabled } from '../utils/notificationPopup';
+import { rememberGroupwareCredentials } from '../utils/groupware';
 
 const LOGIN_WINDOW_HEIGHT = 720;
 const REMEMBER_EMAIL_KEY = 'emax_remember_email';
@@ -73,6 +74,7 @@ export default function Login() {
           localStorage.removeItem(SAVED_EMAIL_KEY);
         }
       } catch { /* ignore */ }
+      rememberGroupwareCredentials(user.email || email, password);
       setAuth(user, token, { mustChangePassword: !!mustChangePassword });
       if (isNotificationPopupEnabled()) {
         window.electronAPI?.showNotification('로그인', `${user.name}님 로그인되었습니다.`);
