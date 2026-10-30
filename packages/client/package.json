@@ -103,8 +103,7 @@
       "artifactName": "TPA-Korea-Setup-${version}.${ext}"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "oneClick": true
     }
   }
 }
