@@ -40,8 +40,8 @@ jobs:
       - name: Build installer
         working-directory: packages/client
         env:
-          # 거래처 사외 API (UTM 1442: 3030 → 192.168.123.210:3001)
-          VITE_API_URL: http://121.143.3.163:3030
+          # TPA코리아 이맥스 자체 서버 (공인 IP 직접 보유, 포트포워딩 불필요)
+          VITE_API_URL: http://114.203.209.5:3001
         run: |
           npm run build:icon
           npm run ${{ matrix.build_script }}
@@ -49,7 +49,7 @@ jobs:
       - name: Upload installers to release
         uses: softprops/action-gh-release@v2
         with:
-          name: CSIN-Tech ${{ github.ref_name }}
+          name: TPA-Korea ${{ github.ref_name }}
           files: |
             packages/client/release/*.dmg
             packages/client/release/*.exe

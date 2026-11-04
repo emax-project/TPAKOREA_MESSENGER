@@ -176,7 +176,7 @@ function getNotificationHTML(title, body, progressPercent, hasRoomId, iconDataUr
 </head>
 <body>
   <div class="toast">
-    <span class="toast-brand">CSIN Tech</span>
+    <span class="toast-brand">TPA Korea</span>
     <div class="toast-row">
       <div class="toast-left">
         ${iconHtml}
