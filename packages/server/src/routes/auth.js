@@ -55,45 +55,12 @@ authRouter.get('/password-policy', (_req, res) => {
   return res.json(getPasswordPolicy());
 });
 
-authRouter.post('/register', async (req, res) => {
-  try {
-    if (isLdapEnabled()) {
-      return res.status(403).json({ error: 'REGISTER_DISABLED' });
-    }
-    const { email, password, name } = req.body;
-    if (!email || !password || !name) {
-      return res.status(400).json({ error: 'email, password, name required' });
-    }
-    const policyError = validatePassword(password);
-    if (policyError) return res.status(400).json({ error: policyError });
-    // isAdmin은 순전히 이메일이 ADMIN_EMAIL 목록에 있는지로 결정된다 (lib/admin.js).
-    // 공개 가입을 그대로 열어두면 관리자 이메일 주소를 아는 사람이 실제 관리자보다
-    // 먼저 가입해 관리자 권한을 선점할 수 있으므로, 관리자 이메일은 셀프 가입을 막고
-    // scripts/create-admin.js로 운영자가 서버에서 직접 생성하도록 한다.
-    if (isAdminEmail(email)) {
-      return res.status(403).json({ error: 'ADMIN_REGISTER_DISABLED' });
-    }
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      return res.status(409).json({ error: 'Email already registered' });
-    }
-    const hashed = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { email, password: hashed, name },
-      select: { id: true, email: true, name: true, createdAt: true },
-    });
-    await prisma.userSession.deleteMany({ where: { userId: user.id } });
-    const session = await prisma.userSession.create({ data: { userId: user.id } });
-    const token = signToken({ userId: user.id, sessionId: session.id });
-    const userWithAdmin = {
-      ...user,
-      isAdmin: isAdminEmail(user.email),
-    };
-    return res.status(201).json({ user: userWithAdmin, token });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Registration failed' });
-  }
+// 셀프 가입은 쓰지 않는다 — 계정은 전부 관리자가 생성한다 (scripts/create-admin.js,
+// 또는 사내 bulk 등록 화면). 과거 셀프 가입 UI/엔드포인트가 열려 있던 흔적이 App
+// Store 심사에서 "회원가입 기능이 없다"는 설명과 어긋나 문제가 됐던 적이 있어,
+// 엔드포인트 자체를 항상 막아둔다.
+authRouter.post('/register', async (_req, res) => {
+  return res.status(403).json({ error: 'REGISTER_DISABLED' });
 });
 
 authRouter.post('/login', async (req, res) => {
