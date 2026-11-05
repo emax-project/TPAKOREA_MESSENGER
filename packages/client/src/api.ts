@@ -7,6 +7,22 @@ const DEFAULT_BASE =
 
 const API_URL_KEY = 'emax_api_url';
 
+/**
+ * 과거 빌드 기본값(HTTP) — 로그인 시 서버 주소가 localStorage에 저장되어 빌드 기본값보다 우선하므로,
+ * 이 값들이 저장돼 있으면 무시·삭제해 새 빌드 기본값(HTTPS)으로 옮겨가게 한다.
+ */
+const LEGACY_API_URLS = new Set(['http://114.203.209.5:3001', 'http://121.143.3.163:3030']);
+
+function readSavedBaseUrl(): string | null {
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(API_URL_KEY); } catch { return null; }
+  if (saved && LEGACY_API_URLS.has(saved.replace(/\/$/, ''))) {
+    try { localStorage.removeItem(API_URL_KEY); } catch { /* ignore */ }
+    return null;
+  }
+  return saved;
+}
+
 /** 런타임에 설정한 서버 주소가 있으면 사용, 없으면 빌드 시 기본값 */
 export function getBaseUrl(): string {
   if (typeof window === 'undefined') return DEFAULT_BASE;
@@ -15,7 +31,7 @@ export function getBaseUrl(): string {
       ? ''
       : (import.meta.env.VITE_API_URL || DEFAULT_BASE);
   // dev: .env의 API 주소 우선 (localStorage 원격 주소 → 신규 API 404 방지)
-  const saved = import.meta.env.DEV ? null : localStorage.getItem(API_URL_KEY);
+  const saved = import.meta.env.DEV ? null : readSavedBaseUrl();
   const base = saved || envBase;
   // Vite dev(5173)에서 로컬 서버(3001) 사용 시: 프록시 경유로 CORS 회피
   const origin = window.location?.origin || '';

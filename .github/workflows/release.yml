@@ -40,8 +40,8 @@ jobs:
       - name: Build installer
         working-directory: packages/client
         env:
-          # TPA코리아 이맥스 자체 서버 (공인 IP 직접 보유, 포트포워딩 불필요)
-          VITE_API_URL: http://114.203.209.5:3001
+          # TPA코리아 이맥스 자체 서버 — Caddy(3443) HTTPS → node 3001 (docs/HTTPS-TPAKOREA.md)
+          VITE_API_URL: https://msg.tpakorea-gw.co.kr:3443
         run: |
           npm run build:icon
           npm run ${{ matrix.build_script }}
