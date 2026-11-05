@@ -1,5 +1,7 @@
 # TPA코리아 메신저 HTTPS 적용 가이드
 
+> ✅ **적용 완료 (2026-11-05, 앱 v1.2.60)**. 남은 일: 3001 인바운드 닫기 (7단계). 운영 정보는 `docs/TPAKOREA-SERVER.md`.
+>
 > 작성: 2026-11-05 · 대상 서버: 이맥스 자체 Windows 서버 `114.203.209.5` (RDP `:4405`, 설치 경로 `G:\MESSAGE`)
 
 ## 현황
@@ -29,8 +31,8 @@
 
 ## 1단계: DNS 등록 요청 (TPA 담당자)
 
-- [ ] 요청 문구: "메신저 서비스용으로 `msg.tpakorea-gw.co.kr` A 레코드를 `114.203.209.5`로 추가해 주실 수 있을까요? 같은 서버라 인증서와 서버 설정은 저희가 처리하겠습니다."
-- [ ] 반영 확인 (Mac): `dig +short msg.tpakorea-gw.co.kr` 결과가 `114.203.209.5`인지
+- [x] 요청 문구: "메신저 서비스용으로 `msg.tpakorea-gw.co.kr` A 레코드를 `114.203.209.5`로 추가해 주실 수 있을까요? 같은 서버라 인증서와 서버 설정은 저희가 처리하겠습니다."
+- [x] 반영 확인 (Mac): `dig +short msg.tpakorea-gw.co.kr` 결과가 `114.203.209.5`인지
 
 DNS가 반영되기 전에는 2단계가 실패한다.
 
@@ -53,7 +55,7 @@ DNS가 반영되기 전에는 2단계가 실패한다.
    ```
    - `selfhosting` 검증은 HTTP.sys를 쓰기 때문에 IIS와 80을 공유해도 충돌하지 않는다.
    - 처음 실행할 때는 아직 Caddy 서비스가 없어서 재시작 스크립트에서 오류가 날 수 있다. 인증서만 만들어졌으면 무시해도 된다.
-- [ ] 확인: `G:\MESSAGE\certs`에 `*-chain.pem`과 `*-key.pem` 파일이 생겼는지
+- [x] 확인: `G:\MESSAGE\certs`에 `*-chain.pem`과 `*-key.pem` 파일이 생겼는지
 
 ## 3단계: Caddy 설치와 서비스 등록
 
@@ -77,10 +79,9 @@ DNS가 반영되기 전에는 2단계가 실패한다.
    ```powershell
    cd C:\caddy; .\caddy.exe run --config Caddyfile
    ```
-4. 문제가 없으면 Ctrl+C로 끄고 [NSSM](https://nssm.cc/download)으로 서비스를 등록한다.
+4. 문제가 없으면 Ctrl+C로 끄고 서비스로 등록한다. Caddy는 Windows 서비스를 자체 지원하므로 NSSM이 필요 없다.
    ```powershell
-   nssm install caddy C:\caddy\caddy.exe run --config C:\caddy\Caddyfile
-   nssm set caddy AppDirectory C:\caddy
+   sc.exe create caddy start= auto binPath= "C:\caddy\caddy.exe run --config C:\caddy\Caddyfile"
    Start-Service caddy
    ```
 
@@ -92,8 +93,8 @@ New-NetFirewallRule -DisplayName "Messenger HTTPS 3443" -Direction Inbound -Prot
 
 ## 5단계: 외부 동작 확인 (Mac)
 
-- [ ] `curl -I https://msg.tpakorea-gw.co.kr:3443/` 결과가 인증서 오류 없이 응답하는지
-- [ ] 브라우저로 접속했을 때 자물쇠 아이콘과 서버 안내 페이지가 보이는지
+- [x] `curl -I https://msg.tpakorea-gw.co.kr:3443/` 결과가 인증서 오류 없이 응답하는지
+- [x] 브라우저로 접속했을 때 자물쇠 아이콘과 서버 안내 페이지가 보이는지
 
 ## 6단계: 앱 릴리즈 (이 저장소)
 
@@ -108,6 +109,14 @@ New-NetFirewallRule -DisplayName "Messenger HTTPS 3443" -Direction Inbound -Prot
 - [ ] 모든 사용자가 새 버전으로 업데이트할 때까지 **3001 인바운드는 유지한다.** 구버전 앱은 `http://114.203.209.5:3001`로 접속한다.
 - [ ] 전원 업데이트가 끝나면 방화벽에서 3001 인바운드 규칙을 닫는다. Caddy는 `127.0.0.1`로 접속하므로 영향이 없다.
 - [ ] 약 2개월 뒤 자동 갱신이 됐는지 확인한다. 작업 스케줄러의 win-acme 작업과 인증서 만료일을 본다.
+
+## 진행 기록 (2026-11-05)
+
+- DNS: 거래처가 카페24에서 `msg.tpakorea-gw.co.kr` A 레코드 등록 (원래 계획은 `messenger.`였으나 `msg.`로 결정)
+- 인증서: win-acme 2.2.9로 발급 (http-01 selfhosting 검증 통과), 만료 2027-02-03, 다음 갱신 2026-12-30 이후
+- Caddy: `sc.exe`로 서비스 등록, 외부 확인 결과 HTTPS 200, WebSocket 업그레이드 101
+- 앱 v1.2.60 릴리즈: `VITE_API_URL` 변경, 로그인 시 저장된 예전 HTTP 주소를 무시하도록 `api.ts` 수정
+- 결정: 포트 없는 `msg.tpakorea-gw.co.kr`(443)는 그룹웨어로 가는 상태 그대로 둠
 
 ## 문제 해결
 
