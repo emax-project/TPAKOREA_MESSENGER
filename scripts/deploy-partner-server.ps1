@@ -5,7 +5,7 @@
 # RDP(114.203.209.5:4405, administrator) 접속 후 PowerShell(관리자)에서 실행:
 #   cd G:\MESSAGE
 #   Set-ExecutionPolicy Bypass -Scope Process -Force
-#   .\scripts\deploy-partner-server.ps1              # 코드 업데이트 + 의존성 + DB 마이그레이션
+#   .\scripts\deploy-partner-server.ps1              # 코드 업데이트 + 의존성 + DB 마이그레이션 + 재시작
 #   .\scripts\deploy-partner-server.ps1 -SyncUsers   # + ERP(MSSQL) 조직/사용자 동기화
 #
 # 최초 설치 시:
@@ -14,7 +14,9 @@
 #     (서버는 packages\server 에서 실행되며 dotenv가 그 폴더의 .env를 읽는다)
 
 param(
-  [switch]$SyncUsers
+  [switch]$SyncUsers,
+  # node 서버를 띄우는 작업 스케줄러 작업 (node.exe G:\MESSAGE\packages\server\src\index.js, 시작 폴더 packages\server)
+  [string]$TaskName = "TPAMessenger"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,7 +25,8 @@ $Server = Join-Path $Root "packages\server"
 Set-Location $Root
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "node 명령을 찾을 수 없습니다. Node.js를 설치하세요." }
-if (-not (Test-Path (Join-Path $Server ".env")) -and -not (Test-Path (Join-Path $Root ".env"))) {
+if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { throw "작업 스케줄러 '$TaskName' 없음" }
+if (-not (Test-Path (Join-Path $Server ".env"))) {
   throw ".env 없음. copy .env.partner.example packages\server\.env 후 값을 채우세요."
 }
 
@@ -31,10 +34,12 @@ Write-Host "==> git pull (tpakorea main)"
 git pull --ff-only
 if ($LASTEXITCODE -ne 0) { throw "git pull 실패 — 로컬 변경사항 확인" }
 
-Write-Host "==> npm ci (server)"
-Set-Location $Server
-npm ci --omit=dev
+# npm workspaces 구조 — lock 파일은 루트에 있으므로 루트에서 server 워크스페이스만 설치
+# (prisma CLI가 devDependency라 --omit=dev 쓰면 안 됨)
+Write-Host "==> npm ci (server workspace)"
+npm ci --workspace packages/server
 if ($LASTEXITCODE -ne 0) { throw "npm ci 실패" }
+Set-Location $Server
 
 Write-Host "==> prisma generate / migrate deploy"
 npm run db:generate
@@ -42,10 +47,13 @@ if ($LASTEXITCODE -ne 0) { throw "prisma generate 실패" }
 npm run db:migrate:deploy
 if ($LASTEXITCODE -ne 0) { throw "prisma migrate deploy 실패" }
 
-Write-Host ""
-Write-Host "==> 이제 node 서버를 재시작하세요 (실행 방식에 맞게: 서비스/pm2/수동)."
-Write-Host "    재시작 후 아무 키나 누르면 상태를 확인합니다."
-[void][System.Console]::ReadKey($true)
+Write-Host "==> restart node (작업 스케줄러 $TaskName)"
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+# 혹시 남아 있는 3001 리스너(node) 정리
+$left = Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue
+if ($left) { Stop-Process -Id $left.OwningProcess -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }
+Start-ScheduledTask -TaskName $TaskName
 
 Write-Host "==> wait for API http://127.0.0.1:3001/"
 $ok = $false

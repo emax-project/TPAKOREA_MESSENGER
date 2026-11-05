@@ -10,7 +10,9 @@
 | 서버 | 이맥스 자체 관리 **Windows** 서버 `114.203.209.5` (공인 IP 직접 보유, 포트포워딩 없음) |
 | 원격 접속 | RDP `114.203.209.5:4405` (administrator) |
 | 설치 위치 | `G:\MESSAGE` |
-| 실행 방식 | **Node.js 직접 실행 (Docker 아님)**, `0.0.0.0:3001`에서 대기 |
+| 실행 방식 | **Node.js 직접 실행 (Docker 아님)** — 작업 스케줄러 **`TPAMessenger`**: `node.exe G:\MESSAGE\packages\server\src\index.js` (시작 폴더 `G:\MESSAGE\packages\server`), `0.0.0.0:3001` |
+| 설정 파일 | `G:\MESSAGE\packages\server\.env` |
+| 재시작 | `Stop-ScheduledTask TPAMessenger; Start-ScheduledTask TPAMessenger` |
 | 같은 서버의 다른 서비스 | 443 = Tomcat9 (그룹웨어 `tpakorea-gw.co.kr`), 80 = IIS |
 
 ## 접속 주소
@@ -65,9 +67,9 @@ $psql = (Get-ChildItem "C:\Program Files\PostgreSQL\*\bin\psql.exe" | Select-Obj
   -c 'SELECT email, name, "createdAt" FROM "User" ORDER BY "createdAt" DESC LIMIT 20;'
 ```
 
-## 확인 필요 (아직 문서화 안 됨)
+## 확인 항목
 
-- [ ] node 실행 방식: Windows 서비스 / pm2 / 작업 스케줄러 / 수동 실행 중 무엇인지, 재시작 방법
-- [ ] `.env` 정확한 경로 (`packages\server\.env`로 추정 — dotenv가 실행 폴더 기준)
+- [x] node 실행 방식: 작업 스케줄러 `TPAMessenger` (재시작: Stop/Start-ScheduledTask)
+- [x] `.env` 경로: `G:\MESSAGE\packages\server\.env`
 - [ ] PostgreSQL 설치 버전·경로
-- [ ] 서버 코드 업데이트(배포) 절차
+- [x] 서버 코드 업데이트(배포) 절차: `scripts/deploy-partner-server.ps1`
