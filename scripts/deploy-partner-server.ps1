@@ -1,34 +1,51 @@
-# TPA코리아 — 이맥스 자체 서버(Windows, 114.203.209.5) 배포
-# (거래처 서버 아님 — 이맥스가 직접 관리하는 서버. 공인 IP 직접 보유, NAT/포트포워딩 불필요)
-# RDP(114.203.209.5:4405, administrator) 접속 후 PowerShell(관리자)에서 실행:
-#   Set-ExecutionPolicy Bypass -Scope Process -Force
-#   .\scripts\deploy-partner-server.ps1
+# TPA코리아 — 이맥스 자체 서버(Windows, 114.203.209.5) 서버 코드 업데이트
+# ※ 이 서버는 Docker를 쓰지 않는다. Node.js + PostgreSQL을 Windows에 직접 설치해 실행한다.
+#    운영 정보: docs/TPAKOREA-SERVER.md / HTTPS(Caddy·인증서): docs/HTTPS-TPAKOREA.md
 #
-# 사전:
-#   - Docker Desktop(또는 Docker Engine) 설치, Git 설치
-#   - 설치 경로: G드라이브(용량 여유 있는 곳) 권장, 예: G:\MESSAGE
-#   - 방화벽: netsh advfirewall firewall add rule name="Messenger API 3001" dir=in action=allow protocol=TCP localport=3001
+# RDP(114.203.209.5:4405, administrator) 접속 후 PowerShell(관리자)에서 실행:
 #   cd G:\MESSAGE
-#   copy .env.partner.example .env
-#   # .env 에 JWT_SECRET, PARTNER_MSSQL_PASSWORD 입력 (ADMIN_EMAIL/COMPANY_NAME은 기본값 채워둠)
-#   # PARTNER_MSSQL_DATABASE는 RDP 접속 후 실제 DB명으로 채울 것 (sa로 조회)
-#   # PARTNER_MSSQL_SERVER: DB가 이 서버와 같은 호스트면 localhost로 바꿔도 됨 (RDP 접속 후 확인)
+#   Set-ExecutionPolicy Bypass -Scope Process -Force
+#   .\scripts\deploy-partner-server.ps1              # 코드 업데이트 + 의존성 + DB 마이그레이션
+#   .\scripts\deploy-partner-server.ps1 -SyncUsers   # + ERP(MSSQL) 조직/사용자 동기화
+#
+# 최초 설치 시:
+#   - Node.js, Git, PostgreSQL(localhost:5432, DB/계정 message) 설치
+#   - copy .env.partner.example packages\server\.env 후 비밀값(JWT_SECRET, DB/MSSQL 비밀번호) 입력
+#     (서버는 packages\server 에서 실행되며 dotenv가 그 폴더의 .env를 읽는다)
+
+param(
+  [switch]$SyncUsers
+)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$Server = Join-Path $Root "packages\server"
 Set-Location $Root
 
-if (-not (Test-Path ".env")) {
-  Write-Error ".env 없음. copy .env.partner.example .env 후 값을 채우세요."
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "node 명령을 찾을 수 없습니다. Node.js를 설치하세요." }
+if (-not (Test-Path (Join-Path $Server ".env")) -and -not (Test-Path (Join-Path $Root ".env"))) {
+  throw ".env 없음. copy .env.partner.example packages\server\.env 후 값을 채우세요."
 }
 
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-  Write-Error "docker 명령을 찾을 수 없습니다. Docker Desktop을 설치·실행하세요."
-}
+Write-Host "==> git pull (tpakorea main)"
+git pull --ff-only
+if ($LASTEXITCODE -ne 0) { throw "git pull 실패 — 로컬 변경사항 확인" }
 
-Write-Host "==> docker compose up -d --build"
-docker compose up -d --build
-if ($LASTEXITCODE -ne 0) { throw "docker compose failed" }
+Write-Host "==> npm ci (server)"
+Set-Location $Server
+npm ci --omit=dev
+if ($LASTEXITCODE -ne 0) { throw "npm ci 실패" }
+
+Write-Host "==> prisma generate / migrate deploy"
+npm run db:generate
+if ($LASTEXITCODE -ne 0) { throw "prisma generate 실패" }
+npm run db:migrate:deploy
+if ($LASTEXITCODE -ne 0) { throw "prisma migrate deploy 실패" }
+
+Write-Host ""
+Write-Host "==> 이제 node 서버를 재시작하세요 (실행 방식에 맞게: 서비스/pm2/수동)."
+Write-Host "    재시작 후 아무 키나 누르면 상태를 확인합니다."
+[void][System.Console]::ReadKey($true)
 
 Write-Host "==> wait for API http://127.0.0.1:3001/"
 $ok = $false
@@ -38,19 +55,22 @@ for ($i = 1; $i -le 40; $i++) {
     if ($r.StatusCode -ge 200) { $ok = $true; break }
   } catch { Start-Sleep -Seconds 2 }
 }
-if (-not $ok) {
-  docker compose logs --tail 80 server
-  throw "API did not become ready"
-}
-Write-Host "API up"
+if (-not $ok) { throw "API(3001)가 응답하지 않습니다 — node 서버 로그 확인" }
+Write-Host "API up (3001)"
 
-Write-Host "==> partner org sync (create users)"
-docker compose exec -T server npm run partner:org:sync:users
-if ($LASTEXITCODE -ne 0) {
-  docker compose exec -T server node scripts/sync-partner-org.js --create-users
+try {
+  $r = Invoke-WebRequest -Uri "https://msg.tpakorea-gw.co.kr:3443/" -UseBasicParsing -TimeoutSec 5
+  Write-Host "HTTPS up (3443, Caddy) — $($r.StatusCode)"
+} catch {
+  Write-Warning "HTTPS(3443) 응답 없음 — Get-Service caddy 확인"
 }
 
+if ($SyncUsers) {
+  Write-Host "==> partner org sync (create users)"
+  npm run partner:org:sync:users
+  if ($LASTEXITCODE -ne 0) { throw "조직 동기화 실패" }
+}
+
+Set-Location $Root
 Write-Host "==> done"
-Write-Host "접속: http://114.203.209.5:3001/ (공인 IP 직접 보유 — 사내/사외 동일 주소)"
-Write-Host "방화벽 인바운드 3001 열려있는지 확인: netsh advfirewall firewall show rule name=`"Messenger API 3001`""
-Write-Host "클라이언트 기본 URL: http://114.203.209.5:3001"
+Write-Host "앱 접속 주소: https://msg.tpakorea-gw.co.kr:3443 (v1.2.60~)  /  구버전: http://114.203.209.5:3001"
