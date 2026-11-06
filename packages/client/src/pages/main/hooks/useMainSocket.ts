@@ -234,7 +234,7 @@ export function useMainSocket({
         setOnlineUserIds((prev) => new Set([...prev, uid]));
       }
       if (payload.userId && String(payload.userId) !== String(myIdRef.current)) {
-        const name = payload.userName?.trim() || uid;
+        const name = payload.userName?.trim() || String(payload.userId);
         const title = 'TPA-Korea';
         const body = `${name}님이 로그인했습니다.`;
         if (window.electronAPI?.showNotification) {
