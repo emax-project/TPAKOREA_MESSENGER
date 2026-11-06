@@ -69,7 +69,7 @@ Restart-Service caddy
 ```powershell
 cd G:\MESSAGE
 Set-ExecutionPolicy Bypass -Scope Process -Force
-.\scripts\deploy-partner-server.ps1              # git pull → npm ci → prisma migrate deploy → 재시작 → 3001/3443 확인
+.\scripts\deploy-partner-server.ps1              # git pull → 서버 중지 → npm ci → prisma db push → 서버 시작 → 3001/3443 확인
 .\scripts\deploy-partner-server.ps1 -SyncUsers   # 위 작업 + ERP 조직/사용자 동기화
 ```
 
