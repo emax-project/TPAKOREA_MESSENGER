@@ -141,7 +141,7 @@ export function useChatSocket({
                         ]);
                       } else if (msg.senderId && electronAPI.fetchUserAvatar) {
                         icon = await Promise.race([
-                          electronAPI.fetchUserAvatar(msg.senderId, base, token),
+                          electronAPI.fetchUserAvatar(msg.senderId),
                           new Promise<null>((r) => setTimeout(() => r(null), 250)),
                         ]);
                       }
