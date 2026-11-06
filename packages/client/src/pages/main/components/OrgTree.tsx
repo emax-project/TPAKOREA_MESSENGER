@@ -3,7 +3,7 @@ import type { MouseEvent } from 'react';
 import { orgApi, type OrgCompany, type OrgDepartment, type OrgGroup, type OrgUser } from '../../../api';
 import type { OnlinePresenceMap } from '../../../utils/presence';
 import { cn } from '../../../utils/cn';
-import { allOrgUsers, companyUsers, defaultOpenDepartmentIds, departmentUsers, displayDepartmentUserCount, flattenDepartments, formatJobTitle } from '../../../utils/orgTree';
+import { allOrgUsers, companyUsers, defaultOpenDepartmentIds, displayDepartmentUserCount, flattenDepartments, formatJobTitle } from '../../../utils/orgTree';
 import { getOrgTheme, type OrgThemeId } from '../../../utils/orgTheme';
 
 const ACTIVE_BLUE = '#5B8DEF';
@@ -355,24 +355,50 @@ function OrgTree({
   };
 
   /**
+   * 접혀서 아직 지연 로드가 안 된 부서(usersLoaded === false)의 인원을 "전체 선택"용으로 따로 받아 둔 캐시.
+   * 트리 자체(펼침 상태)는 건드리지 않고, 선택 상태·체크 표시·다건 액션 대상 계산에만 쓴다.
+   */
+  const [fetchedDeptUsers, setFetchedDeptUsers] = useState<Map<string, OrgUser[]>>(() => new Map());
+
+  /** 부서 트리에서 현재 알고 있는 모든 인원 (로드된 부서는 d.users, 안 된 부서는 캐시). */
+  const knownUsers = (departments: OrgDepartment[]): OrgUser[] => {
+    const byId = new Map<string, OrgUser>();
+    flattenDepartments(departments).forEach((d) => {
+      const users = d.usersLoaded === false ? (fetchedDeptUsers.get(d.id) ?? []) : (d.users ?? []);
+      users.forEach((u) => byId.set(u.id, u));
+    });
+    return [...byId.values()];
+  };
+
+  /**
    * 부서/회사 "전체 선택"용: 접혀서 아직 지연 로드가 안 된 부서는 users가 비어 있으므로,
-   * 그 부서들만 GET /org/departments/:id/users로 따로 받아와 합친 뒤 완전한 인원 목록을 돌려준다.
-   * (펼쳐본 부서만 선택되고 나머지는 빠지는 문제 방지 — usersLoaded===false인 부서만 추가 조회)
+   * 그 부서들만 GET /org/departments/:id/users로 따로 받아와 캐시에 넣은 뒤 완전한 인원 목록을 돌려준다.
+   * (펼쳐본 부서만 선택되고 나머지는 빠지는 문제 방지)
    */
   const resolveAllUsers = async (departments: OrgDepartment[]): Promise<OrgUser[]> => {
     const flat = flattenDepartments(departments);
-    const byId = new Map<string, OrgUser>();
-    const toFetch = flat.filter((d) => d.usersLoaded === false);
+    const toFetch = flat.filter((d) => d.usersLoaded === false && !fetchedDeptUsers.has(d.id));
+    const fetched = new Map<string, OrgUser[]>();
     if (toFetch.length > 0) {
       const results = await Promise.all(
-        toFetch.map((d) => orgApi.departmentUsers(d.id).catch(() => [] as OrgUser[])),
+        toFetch.map((d) => orgApi.departmentUsers(d.id).catch(() => null)),
       );
-      results.forEach((users) => users.forEach((u) => byId.set(u.id, u)));
+      // 실패한 부서는 캐시에 넣지 않아 다음 체크 때 다시 시도한다.
+      toFetch.forEach((d, i) => { const r = results[i]; if (r) fetched.set(d.id, r); });
+      if (fetched.size > 0) {
+        setFetchedDeptUsers((prev) => {
+          const next = new Map(prev);
+          fetched.forEach((users, id) => next.set(id, users));
+          return next;
+        });
+      }
     }
-    const fetchedDeptIds = new Set(toFetch.map((d) => d.id));
+    const byId = new Map<string, OrgUser>();
     flat.forEach((d) => {
-      if (fetchedDeptIds.has(d.id)) return;
-      (d.users ?? []).forEach((u) => byId.set(u.id, u));
+      const users = d.usersLoaded === false
+        ? (fetched.get(d.id) ?? fetchedDeptUsers.get(d.id) ?? [])
+        : (d.users ?? []);
+      users.forEach((u) => byId.set(u.id, u));
     });
     return [...byId.values()];
   };
@@ -382,6 +408,8 @@ function OrgTree({
     if (view === 'groups') {
       orgGroups.forEach((g) => g.members.forEach((u) => map.set(u.id, u)));
     } else {
+      // 지연 로드 전이라 트리에 없는 인원도 "전체 선택"으로 선택됐을 수 있으므로 캐시도 포함
+      fetchedDeptUsers.forEach((users) => users.forEach((u) => map.set(u.id, u)));
       allOrgUsers(orgTree).forEach((u) => map.set(u.id, u));
     }
     return map;
@@ -635,7 +663,7 @@ function OrgTree({
     const deptOpen = treeOpen[deptKey] !== undefined ? !!treeOpen[deptKey] : defaultOpenDeptIds.has(dept.id);
     const children = dept.children ?? [];
     // 이 부서 + 모든 하위 부서의 인원 (아직 로드 안 된 부서가 섞여 있으면 선택 가능한 건 로드된 사람만)
-    const deptIds = departmentUsers(dept).map((u) => u.id);
+    const deptIds = knownUsers([dept]).map((u) => u.id);
     const deptAllSelected = deptIds.length > 0 && deptIds.every((id) => selectedIds.has(id));
     // 표시용 인원수: 아직 지연 로드 전이면 정확한 참고용 총원(userCount)을, 로드가 끝났으면
     // 실제로 화면에 보이는(필터링된) 인원수를 보여준다 — "온라인만 보기" 등으로 걸러진 뒤에도
@@ -766,7 +794,7 @@ function OrgTree({
         const companyKey = `company-${company.id}`;
         const companyOpen = treeOpen[companyKey] !== false;
         const memberCount = companyMemberCounts?.[company.id] ?? countCompanyUsers(company);
-        const companyUserIds = companyUsers(company).map((u) => u.id);
+        const companyUserIds = knownUsers(company.departments ?? []).map((u) => u.id);
         const companyAllSelected =
           companyUserIds.length > 0 && companyUserIds.every((id) => selectedIds.has(id));
         const rootDepts = company.departments ?? [];
