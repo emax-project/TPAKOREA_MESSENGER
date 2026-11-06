@@ -626,6 +626,9 @@ export const appSettingsApi = {
   getExternalSite: () => api.get('/settings/external-site') as Promise<{ url: string }>,
   putExternalSite: (url: string) =>
     api.put('/settings/external-site', { url }) as Promise<{ url: string }>,
+  getMailSite: () => api.get('/settings/mail-site') as Promise<{ url: string }>,
+  putMailSite: (url: string) =>
+    api.put('/settings/mail-site', { url }) as Promise<{ url: string }>,
 };
 
 export const announcementApi = {

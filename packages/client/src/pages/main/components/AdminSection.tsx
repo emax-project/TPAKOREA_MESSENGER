@@ -23,13 +23,23 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'users', label: '사용자 관리' },
 ];
 
-function SidebarLinkSettings({ isDark }: { isDark: boolean }) {
+type LinkSettingProps = {
+  isDark: boolean;
+  queryKey: string;
+  title: string;
+  description: string;
+  placeholder: string;
+  load: () => Promise<{ url: string }>;
+  store: (url: string) => Promise<{ url: string }>;
+};
+
+function SidebarLinkSettings({ isDark, queryKey, title, description, placeholder, load, store }: LinkSettingProps) {
   const accent = useAccentStyles(isDark);
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const { data } = useQuery({
-    queryKey: ['settings', 'external-site'],
-    queryFn: appSettingsApi.getExternalSite,
+    queryKey: ['settings', queryKey],
+    queryFn: load,
   });
   const [url, setUrl] = useState('');
   const [saving, setSaving] = useState(false);
@@ -41,9 +51,9 @@ function SidebarLinkSettings({ isDark }: { isDark: boolean }) {
   const save = async () => {
     setSaving(true);
     try {
-      const saved = await appSettingsApi.putExternalSite(url);
+      const saved = await store(url);
       setUrl(saved.url);
-      await queryClient.invalidateQueries({ queryKey: ['settings', 'external-site'] });
+      await queryClient.invalidateQueries({ queryKey: ['settings', queryKey] });
       showToast(saved.url ? '링크를 저장했습니다' : '링크를 비웠습니다', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : '저장에 실패했습니다', 'error');
@@ -69,10 +79,10 @@ function SidebarLinkSettings({ isDark }: { isDark: boolean }) {
     <div className={cn('flex flex-col gap-2 rounded-lg px-3 py-2.5', isDark ? 'bg-slate-800' : 'bg-white')}>
       <div>
         <div className={cn('text-[13px] font-semibold', isDark ? 'text-slate-200' : 'text-slate-800')}>
-          사이드바 링크 접속
+          {title}
         </div>
         <p className={cn('mt-1 mb-0 text-xs leading-relaxed', muted)}>
-          왼쪽 사이드바 링크 버튼을 누르면 이 주소로 바로 이동합니다. 모든 사용자에게 동일하게 적용됩니다.
+          {description}
         </p>
       </div>
       <div className="flex gap-2 items-center">
@@ -81,7 +91,7 @@ function SidebarLinkSettings({ isDark }: { isDark: boolean }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void save(); }}
-          placeholder="https://portal.example.com"
+          placeholder={placeholder}
           style={{ ...inputStyle, ...accent.inputStyle }}
         />
         <button
@@ -120,7 +130,24 @@ function AdminSection({ isDark, isNarrowLayout = false, currentUserId }: Props) 
         </p>
       </div>
 
-      <SidebarLinkSettings isDark={isDark} />
+      <SidebarLinkSettings
+        isDark={isDark}
+        queryKey="external-site"
+        title="사이드바 링크 접속"
+        description="왼쪽 사이드바 링크 버튼을 누르면 이 주소로 바로 이동합니다. 모든 사용자에게 동일하게 적용됩니다."
+        placeholder="https://portal.example.com"
+        load={appSettingsApi.getExternalSite}
+        store={appSettingsApi.putExternalSite}
+      />
+      <SidebarLinkSettings
+        isDark={isDark}
+        queryKey="mail-site"
+        title="사이드바 메일"
+        description="왼쪽 사이드바 메일 버튼을 누르면 이 주소로 이동합니다. 비워 두면 그룹웨어가 열립니다. 모든 사용자에게 동일하게 적용됩니다."
+        placeholder="https://mail.example.com"
+        load={appSettingsApi.getMailSite}
+        store={appSettingsApi.putMailSite}
+      />
 
       <div
         role="tablist"
