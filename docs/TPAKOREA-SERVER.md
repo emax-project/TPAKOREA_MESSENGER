@@ -74,7 +74,37 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 ```
 
 - 스크립트는 `TPAMessenger` 작업을 멈췄다가 다시 시작해서 node를 재시작한다.
-- DB 마이그레이션을 같이 실행하므로, 스키마가 바뀐 업데이트 전에는 DB를 백업한다.
+- DB 스키마 반영(`prisma db push`)을 같이 실행하므로, 스키마가 바뀐 업데이트 전에는 DB를 백업한다.
+  (TPA DB는 처음에 db push로 만들어져 `_prisma_migrations`가 없다 → `prisma migrate deploy`는 P3005로 실패하니 쓰지 않는다.)
+
+### 자동 배포 (매일 03:00)
+
+작업 스케줄러 `TPAMessengerAutoDeploy`가 매일 03:00에 `scripts\auto-deploy-partner-server.ps1`을 실행한다.
+
+- GitHub `main`에 새 커밋이 없으면 아무것도 하지 않는다.
+- 새 커밋이 있으면 `git pull`한다. 그중 `packages/server/`, `package-lock.json`, `package.json`이 바뀐 경우에만 `deploy-partner-server.ps1`로 서버를 재배포한다(1~2분 접속 끊김).
+- 로그: `G:\MESSAGE\logs\auto-deploy-yyyyMMdd.log` (30일 지난 로그는 자동 삭제). 실패해도 서버는 다시 켜진다.
+
+최초 1회 등록(관리자 PowerShell). Administrator 비밀번호를 묻는다 — 로그오프 상태에서도 실행되게 하려면 필요하다.
+
+```powershell
+$cred = Get-Credential -UserName "$env:COMPUTERNAME\Administrator" -Message "자동 배포를 실행할 계정 비밀번호"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-NoProfile -ExecutionPolicy Bypass -File "G:\MESSAGE\scripts\auto-deploy-partner-server.ps1"' -WorkingDirectory "G:\MESSAGE"
+$trigger = New-ScheduledTaskTrigger -Daily -At 03:00
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -StartWhenAvailable -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName "TPAMessengerAutoDeploy" -Action $action -Trigger $trigger -Settings $settings -User $cred.UserName -Password $cred.GetNetworkCredential().Password -RunLevel Highest
+```
+
+확인·관리:
+
+```powershell
+Start-ScheduledTask -TaskName TPAMessengerAutoDeploy          # 지금 한 번 실행(테스트)
+Get-ScheduledTaskInfo -TaskName TPAMessengerAutoDeploy        # 마지막 실행 시각·결과(0 = 성공)
+Get-Content (Get-ChildItem G:\MESSAGE\logs\auto-deploy-*.log | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+Disable-ScheduledTask -TaskName TPAMessengerAutoDeploy        # 자동 배포 끄기 (다시 켜기: Enable-ScheduledTask)
+```
+
+> Administrator 비밀번호를 바꾸면 이 작업도 비밀번호를 다시 넣어야 실행된다(위 등록 명령을 `Unregister-ScheduledTask -TaskName TPAMessengerAutoDeploy -Confirm:$false` 후 다시 실행).
 
 ## 5. 앱(클라이언트) 릴리즈
 
