@@ -14,6 +14,7 @@ import {
 import { getPasswordPolicy, validatePassword } from '../lib/passwordPolicy.js';
 import { isLocked, recordFailure, recordSuccess } from '../lib/loginAttempts.js';
 import { getSecurityPolicy } from '../lib/securityPolicy.js';
+import { mfaGuessLimiter, mfaReadLimiter, mfaSensitiveLimiter, mfaSetupLimiter } from '../lib/authRateLimit.js';
 import {
   buildOtpauthUrl,
   consumeRecoveryCode,
@@ -292,7 +293,7 @@ async function checkPassword(user, password) {
  * 화면 잠금 해제용. (/auth/login을 재호출하면 기존 세션이 모두 삭제돼 해제 직후 로그아웃된다)
  * 400을 쓰는 이유: 클라이언트는 모든 401을 세션 만료로 보고 강제 로그아웃시키기 때문.
  */
-authRouter.post('/verify-password', authMiddleware, async (req, res) => {
+authRouter.post('/verify-password', mfaGuessLimiter, authMiddleware, async (req, res) => {
   try {
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!password) return res.status(400).json({ error: 'PASSWORD_REQUIRED' });
@@ -392,7 +393,7 @@ async function checkSecondFactor(user, rawCode) {
 const MFA_LOCKED_MESSAGE = '인증 시도가 많아 잠시 잠겼습니다. 15분 뒤에 다시 시도해 주세요.';
 
 /** POST /auth/mfa/verify - 로그인 2단계. body: { mfaToken, code } → 로그인 응답과 동일 */
-authRouter.post('/mfa/verify', async (req, res) => {
+authRouter.post('/mfa/verify', mfaGuessLimiter, async (req, res) => {
   try {
     const payload = verifyPurposeToken(req.body?.mfaToken, MFA_VERIFY);
     if (!payload) return res.status(401).json({ error: 'MFA_TOKEN_INVALID' });
@@ -412,7 +413,7 @@ authRouter.post('/mfa/verify', async (req, res) => {
 });
 
 /** GET /auth/mfa/status - 내 2차 인증 상태와 서버 정책 */
-authRouter.get('/mfa/status', authMiddleware, async (req, res) => {
+authRouter.get('/mfa/status', mfaReadLimiter, authMiddleware, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.userId } });
     if (!user) return res.status(404).json({ error: 'USER_NOT_FOUND' });
@@ -429,7 +430,7 @@ authRouter.get('/mfa/status', authMiddleware, async (req, res) => {
 });
 
 /** POST /auth/mfa/setup/start - 새 비밀키를 만들어 돌려준다(아직 확정 전). body: { mfaToken? } */
-authRouter.post('/mfa/setup/start', async (req, res) => {
+authRouter.post('/mfa/setup/start', mfaSetupLimiter, async (req, res) => {
   try {
     const actor = await resolveMfaActor(req, MFA_SETUP);
     if (!actor) return res.status(401).json({ error: 'MFA_TOKEN_INVALID' });
@@ -453,7 +454,7 @@ authRouter.post('/mfa/setup/start', async (req, res) => {
  * body: { code, mfaToken? }. 복구 코드는 이때 한 번만 보여준다.
  * mfaToken으로 호출했으면(로그인 도중 강제 등록) 세션까지 발급해 로그인을 완료시킨다.
  */
-authRouter.post('/mfa/setup/confirm', async (req, res) => {
+authRouter.post('/mfa/setup/confirm', mfaGuessLimiter, async (req, res) => {
   try {
     const actor = await resolveMfaActor(req, MFA_SETUP);
     if (!actor) return res.status(401).json({ error: 'MFA_TOKEN_INVALID' });
@@ -513,7 +514,7 @@ async function requireReauth(req, res) {
 }
 
 /** POST /auth/mfa/disable - 본인 2차 인증 해제. body: { password, code }. 정책이 '필수'면 해제 불가 */
-authRouter.post('/mfa/disable', authMiddleware, async (req, res) => {
+authRouter.post('/mfa/disable', mfaSensitiveLimiter, authMiddleware, async (req, res) => {
   try {
     if ((await getSecurityPolicy()).twoFactor === 'required') {
       return res.status(403).json({ error: '관리자가 2차 인증을 필수로 설정해 해제할 수 없습니다' });
@@ -532,7 +533,7 @@ authRouter.post('/mfa/disable', authMiddleware, async (req, res) => {
 });
 
 /** POST /auth/mfa/recovery-codes - 복구 코드 재발급(기존 코드는 모두 무효). body: { password, code } */
-authRouter.post('/mfa/recovery-codes', authMiddleware, async (req, res) => {
+authRouter.post('/mfa/recovery-codes', mfaSensitiveLimiter, authMiddleware, async (req, res) => {
   try {
     const user = await requireReauth(req, res);
     if (!user) return;
