@@ -4,6 +4,7 @@ import fs from 'fs';
 import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
 import { policyUpload, recordFileAudit, UPLOAD_DIR } from '../upload.js';
+import { fileUploadLimiter } from '../lib/authRateLimit.js';
 import { getSecurityPolicy } from '../lib/securityPolicy.js';
 
 export const filesRouter = Router();
@@ -20,7 +21,7 @@ function toJson(obj) {
 const FILE_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000; // 10분
 
 // POST /files/upload — Upload a file and create a file message
-filesRouter.post('/upload', (req, res, next) => {
+filesRouter.post('/upload', fileUploadLimiter, (req, res, next) => {
   req.setTimeout(FILE_UPLOAD_TIMEOUT_MS);
   res.setTimeout(FILE_UPLOAD_TIMEOUT_MS);
   next();

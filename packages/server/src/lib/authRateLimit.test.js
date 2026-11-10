@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 process.env.JWT_SECRET ||= 'test-secret';
 process.env.DATABASE_URL ||= 'postgresql://x:x@localhost:1/x';
 
-const { actorKey } = await import('./authRateLimit.js');
+const { actorKey, loginKey } = await import('./authRateLimit.js');
 const { signToken, signPurposeToken } = await import('../auth.js');
 
 test('세션 토큰이면 사용자 단위 키', () => {
@@ -27,4 +27,11 @@ test('다른 비밀키로 서명한 토큰은 신뢰하지 않는다(키 조작�
   const jwt = (await import('jsonwebtoken')).default;
   const forged = jwt.sign({ userId: 'victim', sessionId: 'x' }, 'other-secret');
   assert.equal(actorKey({ headers: { authorization: `Bearer ${forged}` }, ip: '5.5.5.5' }), 'ip:5.5.5.5');
+});
+
+test('로그인 키는 입력 아이디(대소문자·공백 무시) 단위, 없으면 IP', () => {
+  assert.equal(loginKey({ body: { email: ' A@b.com ' }, ip: '1.1.1.1' }), 'login:a@b.com');
+  assert.equal(loginKey({ body: { username: 'Kim' }, ip: '1.1.1.1' }), 'login:kim');
+  assert.equal(loginKey({ body: {}, ip: '1.1.1.1' }), 'ip:1.1.1.1');
+  assert.equal(loginKey({ body: { email: 123 }, ip: '1.1.1.1' }), 'ip:1.1.1.1');
 });

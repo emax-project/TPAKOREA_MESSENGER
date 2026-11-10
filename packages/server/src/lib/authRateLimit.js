@@ -17,13 +17,22 @@ export function actorKey(req) {
   return userId ? `user:${userId}` : `ip:${req.ip}`;
 }
 
-function limiter({ windowMs, limit, message }) {
+/**
+ * 로그인 요청의 제한 키. 비로그인 요청이라 토큰이 없고, 리버스 프록시 뒤에서는 IP가 모두 같아
+ * 한 묶음이 되므로 시도 대상 계정(입력한 아이디)으로 센다. 아이디가 없으면 IP.
+ */
+export function loginKey(req) {
+  const id = req.body?.email ?? req.body?.username;
+  return typeof id === 'string' && id.trim() ? `login:${id.trim().toLowerCase().slice(0, 200)}` : `ip:${req.ip}`;
+}
+
+function limiter({ windowMs, limit, message, keyGenerator = actorKey }) {
   return rateLimit({
     windowMs,
     limit,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: actorKey,
+    keyGenerator,
     // 키가 IP로 떨어지는 경우의 IPv6 안내 경고는 끈다(사용자 키가 기본이고 IP는 비로그인 요청의 보조 수단)
     validate: { keyGeneratorIpFallback: false },
     handler: (_req, res) => res.status(429).json({ error: message }),
@@ -44,3 +53,8 @@ export const mfaGuessLimiter = limiter({ windowMs: MINUTE, limit: 30, message: T
 export const mfaSetupLimiter = limiter({ windowMs: MINUTE, limit: 20, message: TOO_MANY });
 /** 해제·복구 코드 재발급 — 민감 작업이라 더 빡빡하게 */
 export const mfaSensitiveLimiter = limiter({ windowMs: MINUTE, limit: 10, message: TOO_MANY });
+
+/** 로그인 — 계정(입력 아이디)당 분당 20회. 계정 단위 15분 잠금(loginAttempts)과 별개의 안전장치 */
+export const loginLimiter = limiter({ windowMs: MINUTE, limit: 20, message: TOO_MANY, keyGenerator: loginKey });
+/** 파일 업로드 — 사용자당 분당 60회(자원 소모 방어) */
+export const fileUploadLimiter = limiter({ windowMs: MINUTE, limit: 60, message: TOO_MANY });

@@ -14,7 +14,7 @@ import {
 import { getPasswordPolicy, validatePassword } from '../lib/passwordPolicy.js';
 import { isLocked, recordFailure, recordSuccess } from '../lib/loginAttempts.js';
 import { getSecurityPolicy } from '../lib/securityPolicy.js';
-import { mfaGuessLimiter, mfaReadLimiter, mfaSensitiveLimiter, mfaSetupLimiter } from '../lib/authRateLimit.js';
+import { loginLimiter, mfaGuessLimiter, mfaReadLimiter, mfaSensitiveLimiter, mfaSetupLimiter } from '../lib/authRateLimit.js';
 import {
   buildOtpauthUrl,
   consumeRecoveryCode,
@@ -110,7 +110,7 @@ async function issueLogin(req, res, user, mustChangePassword, extra = {}) {
   });
 }
 
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', loginLimiter, async (req, res) => {
   try {
     const identifier = typeof req.body?.email === 'string' ? req.body.email : req.body?.username;
     const password = req.body?.password;
