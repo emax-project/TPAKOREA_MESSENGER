@@ -7,6 +7,7 @@ import { authApi } from './api';
 import { isSessionFromToday } from './utils/authSession';
 import MacTitleBarInset from './components/MacTitleBarInset';
 import ElectronSecondaryShell from './components/ElectronSecondaryShell';
+import ScreenLockGate from './components/ScreenLockGate';
 import { cn } from './utils/cn';
 import { isMacElectron } from './utils/electronChrome';
 
@@ -105,7 +106,12 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
     );
   }
   if (!token) return <Navigate to="/login" replace />;
-  return <>{children}</>;
+  return (
+    <>
+      <ScreenLockGate />
+      {children}
+    </>
+  );
 }
 
 export default function App() {

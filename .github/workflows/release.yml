@@ -39,12 +39,31 @@ jobs:
 
       - name: Build installer
         working-directory: packages/client
+        shell: bash
         env:
           # TPA코리아 이맥스 자체 서버 — Caddy(3443) HTTPS → node 3001 (docs/HTTPS-TPAKOREA.md)
           VITE_API_URL: https://msg.tpakorea-gw.co.kr:3443
+          # ── 코드 서명 (저장소 Settings > Secrets 에 등록하면 자동으로 서명된다) ──
+          # CSC_LINK: 인증서(.pfx / .p12) 파일을 base64로 인코딩한 값 또는 https URL
+          # CSC_KEY_PASSWORD: 인증서 비밀번호
+          # Windows는 인증서의 CN이 업데이트 서명 검증용 발행자 이름(publisherName)으로 자동 설정되어,
+          # 이후 자동 업데이트 때 "같은 발행자가 서명한 설치 파일인지"까지 검증한다.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # macOS 공증(notarization): 아래 3개가 모두 있으면 자동으로 공증한다
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          args=()
+          if [ -n "$CSC_LINK" ]; then
+            # 서명 실패를 조용히 넘기고 서명 안 된 파일이 배포되는 일이 없도록 실패 처리한다
+            args+=(--config.forceCodeSigning=true)
+          else
+            echo "::warning::코드 서명 인증서(CSC_LINK 시크릿)가 없어 서명되지 않은 설치 파일이 만들어집니다. 배포 전에 인증서를 등록하세요."
+          fi
           npm run build:icon
-          npm run ${{ matrix.build_script }}
+          npm run "${{ matrix.build_script }}" -- ${args[@]+"${args[@]}"}
 
       - name: Upload installers to release
         uses: softprops/action-gh-release@v2

@@ -640,6 +640,33 @@ usersRouter.post('/:id/reset-password', async (req, res) => {
 });
 
 /**
+ * POST /users/:id/reset-mfa - 관리자가 사용자의 2차 인증을 초기화한다(인증 앱 분실 등).
+ * 초기화 후 그 사용자의 세션을 모두 끊는다. 정책이 '필수'면 다음 로그인 때 다시 등록하게 된다.
+ */
+usersRouter.post('/:id/reset-mfa', async (req, res) => {
+  try {
+    if (!(await assertAdmin(req, res))) return;
+    const target = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, name: true, email: true, totpEnabled: true },
+    });
+    if (!target) return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: target.id },
+        data: { totpEnabled: false, totpSecret: null, totpLastStep: null, totpRecoveryCodes: null },
+      }),
+      prisma.userSession.deleteMany({ where: { userId: target.id } }),
+    ]);
+    console.log(`[admin] 2차 인증 초기화: ${target.email}`);
+    return res.json({ ok: true, name: target.name, email: target.email, wasEnabled: target.totpEnabled });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Failed to reset MFA' });
+  }
+});
+
+/**
  * PUT /users/:id/job-title - 관리자가 특정 사용자의 직급을 지정한다.
  * body: { jobTitle }  비우면 직급 없음으로 만든다.
  * 본인이 직접 바꾸지 못하게 PUT /users/me 에서는 직급을 받지 않는다.

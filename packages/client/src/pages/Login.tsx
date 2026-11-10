@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authApi } from '../api';
+import type { LoginSuccess } from '../api';
+import MfaSetupPanel from '../components/MfaSetupPanel';
+import { useScreenLockStore } from '../utils/screenLock';
 import { useAuthStore } from '../store';
 import TitleBar, { MacInsetChromeTools } from '../components/TitleBar';
 import { AuthCard } from '../components/AuthCard';
@@ -46,6 +49,9 @@ export default function Login() {
   const [rememberEmail, setRememberEmail] = useState(remembered.remember);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // 2차 인증 진행 중이면 5분짜리 중간 토큰을 들고 있는다(verify: 코드 입력, setup: 필수 정책에 따른 최초 등록)
+  const [mfa, setMfa] = useState<{ kind: 'verify' | 'setup'; token: string } | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
   const [pinned, setPinned] = useState(false);
   const setAuth = useAuthStore((s) => s.setAuth);
   const navigate = useNavigate();
@@ -59,31 +65,77 @@ export default function Login() {
     });
   }, []);
 
+  /** 비밀번호(와 2차 인증)까지 모두 통과한 뒤의 공통 마무리 */
+  const completeLogin = ({ user, token, mustChangePassword }: LoginSuccess) => {
+    try {
+      if (rememberEmail) {
+        localStorage.setItem(REMEMBER_EMAIL_KEY, '1');
+        localStorage.setItem(SAVED_EMAIL_KEY, email.trim());
+      } else {
+        localStorage.removeItem(REMEMBER_EMAIL_KEY);
+        localStorage.removeItem(SAVED_EMAIL_KEY);
+      }
+    } catch { /* ignore */ }
+    rememberGroupwareCredentials(user.email || email, password);
+    setAuth(user, token, { mustChangePassword: !!mustChangePassword });
+    // 이전에 잠긴 채 종료됐더라도 새로 로그인했다면 잠금을 풀고 시작한다
+    useScreenLockStore.getState().unlock();
+    if (isNotificationPopupEnabled()) {
+      window.electronAPI?.showNotification('로그인', `${user.name}님 로그인되었습니다.`);
+    }
+    navigate('/', { replace: true });
+  };
+
+  const showError = (err: unknown, fallback: string) => {
+    const msg = err instanceof Error ? err.message : '';
+    const isNetwork = /fetch|network|connection|refused|Failed to fetch|INVALID_HTTP/i.test(msg) || msg === '';
+    setError(isNetwork ? '서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.' : msg || fallback);
+  };
+
+  const backToCredentials = (message = '') => {
+    setMfa(null);
+    setMfaCode('');
+    setPassword('');
+    setError(message);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      const { user, token, mustChangePassword } = await authApi.login(email, password);
-      try {
-        if (rememberEmail) {
-          localStorage.setItem(REMEMBER_EMAIL_KEY, '1');
-          localStorage.setItem(SAVED_EMAIL_KEY, email.trim());
-        } else {
-          localStorage.removeItem(REMEMBER_EMAIL_KEY);
-          localStorage.removeItem(SAVED_EMAIL_KEY);
-        }
-      } catch { /* ignore */ }
-      rememberGroupwareCredentials(user.email || email, password);
-      setAuth(user, token, { mustChangePassword: !!mustChangePassword });
-      if (isNotificationPopupEnabled()) {
-        window.electronAPI?.showNotification('로그인', `${user.name}님 로그인되었습니다.`);
+      const res = await authApi.login(email, password);
+      if (res.mfaRequired) {
+        setMfa({ kind: 'verify', token: res.mfaToken });
+        return;
       }
-      navigate('/', { replace: true });
+      if (res.mfaSetupRequired) {
+        setMfa({ kind: 'setup', token: res.mfaToken });
+        return;
+      }
+      completeLogin(res);
+    } catch (err) {
+      showError(err, '로그인 실패');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMfaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfa || mfa.kind !== 'verify' || !mfaCode.trim()) return;
+    setError('');
+    setLoading(true);
+    try {
+      completeLogin(await authApi.mfaVerify(mfa.token, mfaCode.trim()));
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
-      const isNetwork = /fetch|network|connection|refused|Failed to fetch|INVALID_HTTP/i.test(msg) || msg === '';
-      setError(isNetwork ? '서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.' : msg || '로그인 실패');
+      if (msg === 'MFA_TOKEN_INVALID') {
+        backToCredentials('인증 시간이 만료되었습니다. 처음부터 다시 로그인해 주세요.');
+      } else {
+        showError(err, '인증에 실패했습니다');
+        setMfaCode('');
+      }
     } finally {
       setLoading(false);
     }
@@ -117,7 +169,57 @@ export default function Login() {
         />
       )}
       <div className="flex-1 flex items-stretch justify-center overflow-y-auto">
-        <AuthCard title="로그인" variant="flush">
+        <AuthCard
+          title={mfa ? '2차 인증' : '로그인'}
+          variant="flush"
+        >
+          {mfa?.kind === 'setup' ? (
+            <div className="w-full">
+              <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+                관리자가 2차 인증을 필수로 설정했습니다. 등록을 마쳐야 로그인할 수 있습니다.
+              </p>
+              <MfaSetupPanel
+                mfaToken={mfa.token}
+                onDone={(login) => {
+                  if (login) completeLogin(login);
+                  else backToCredentials('등록되었습니다. 다시 로그인해 주세요.');
+                }}
+                onCancel={() => backToCredentials()}
+              />
+            </div>
+          ) : mfa?.kind === 'verify' ? (
+            <form onSubmit={(e) => { void handleMfaSubmit(e); }} className="flex flex-col gap-4 w-full">
+              <p className="m-0 text-[13px] leading-relaxed text-slate-600">
+                인증 앱에 표시된 6자리 코드를 입력하세요. 휴대폰을 쓸 수 없다면 복구 코드를 입력할 수 있습니다.
+              </p>
+              <UITextInput
+                type="text"
+                inputMode="text"
+                autoComplete="one-time-code"
+                placeholder="6자리 코드 또는 복구 코드"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                autoFocus
+                required
+                className="!px-4 !py-3 !rounded-xl !border !border-[#e2e8f0] !bg-[#f8fafc] !text-black placeholder:!text-[#64748b]"
+              />
+              {error && (
+                <p className="px-3 py-2 rounded-xl text-[13px] text-red-600 bg-red-50/80" role="alert">
+                  {error}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={loading || !mfaCode.trim()}
+                className="w-full py-3.5 rounded-full bg-black text-white font-semibold text-[15px] disabled:opacity-60 transition-opacity"
+              >
+                {loading ? '확인 중...' : '확인'}
+              </button>
+              <button type="button" onClick={() => backToCredentials()} className="border-none bg-transparent py-1 text-[13px] text-slate-500 underline">
+                처음으로
+              </button>
+            </form>
+          ) : (
           <form onSubmit={handleSubmit} className="flex flex-col gap-4 w-full">
             <div className="relative">
               <UITextInput
@@ -171,6 +273,7 @@ export default function Login() {
               {loading ? '로그인 중...' : '로그인'}
             </button>
           </form>
+          )}
         </AuthCard>
       </div>
     </div>

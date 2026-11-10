@@ -31,6 +31,7 @@
     "@tiptap/starter-kit": "^3.31.3",
     "dompurify": "^3.4.17",
     "electron-updater": "^6.7.3",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.4",
@@ -46,6 +47,7 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/dompurify": "^3.0.5",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
@@ -85,6 +87,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "!electron/**/*.test.js",
       "build/icons/**"
     ],
     "mac": {
@@ -103,7 +106,12 @@
       "artifactName": "TPA-Korea-Setup-${version}.${ext}"
     },
     "nsis": {
-      "oneClick": true
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": false,
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "CSIN-Tech"
     }
   }
 }

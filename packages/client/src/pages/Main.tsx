@@ -7,7 +7,7 @@ import { roomsApi, orgApi, announcementApi, eventsApi, usersApi, mentionsApi, me
 import MemoComposeModal from '../components/MemoComposeModal';
 import ToastProvider from '../components/ui/ToastProvider';
 import TitleBar, { MacInsetChromeTools } from '../components/TitleBar';
-import AppLockOverlay from '../components/AppLockOverlay';
+import { useScreenLockStore } from '../utils/screenLock';
 import { applyWindowPinClass, isMacElectron, isWinElectron } from '../utils/electronChrome';
 import {
   normalizeTimeRange,
@@ -179,7 +179,7 @@ export default function Main() {
       return 'split';
     }
   });
-  const [screenLocked, setScreenLocked] = useState(false);
+  const lockScreen = useScreenLockStore((s) => s.lock);
   const [askSaveAs, setAskSaveAs] = useState(false);
   const autoAwayRef = useRef(false);
   const [roomSearchQuery, setRoomSearchQuery] = useState('');
@@ -1196,7 +1196,6 @@ export default function Main() {
           onSettings={() => setActivePanel((p) => (p === 'settings' ? 'none' : 'settings'))}
         />
       )}
-      {screenLocked && <AppLockOverlay onUnlock={() => setScreenLocked(false)} />}
       <div className="flex flex-1 flex-row min-h-0 min-w-0">
         <LeftSidebar
           isDark={isDark}
@@ -1213,7 +1212,7 @@ export default function Main() {
           affiliations={affiliationData?.affiliations ?? []}
           onSwitchAffiliation={(id) => { void handleSwitchAffiliation(id); }}
           currentDeptLabel={currentDeptLabel}
-          onLock={() => setScreenLocked(true)}
+          onLock={lockScreen}
           onLogout={handleLogout}
           onQuit={hasElectron ? handleQuitApp : undefined}
           externalSiteUrl={externalSiteUrl}

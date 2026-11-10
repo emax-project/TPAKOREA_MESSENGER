@@ -40,6 +40,7 @@ interface Window {
     clearToken?: () => Promise<boolean>;
     setTrustedBaseUrl?: (url: string) => Promise<boolean>;
     onLogout: (handler: () => void) => () => void;
+    onSystemLock?: (handler: () => void) => () => void;
     onNavigateToRoom: (handler: (roomId: string) => void) => () => void;
     getAppVersion: () => Promise<string>;
     getAppInfo: () => Promise<{ version: string; isPackaged: boolean; platform: string }>;

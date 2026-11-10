@@ -1,4 +1,5 @@
 import { clearSessionDate, getActiveToken, removeStoredToken } from './utils/authSession';
+import { evaluateFilePolicy } from './utils/filePolicy';
 
 // 빈 문자열이면 같은 origin 사용(배포 시 같은 서버에서 API·웹 서빙), 없으면 로컬 개발용
 /** 거래처 사외 기본 API (UTM 1442: 121.143.3.163:3030 → 192.168.123.210:3001) */
@@ -193,6 +194,14 @@ export const api = {
     });
   },
 };
+
+export type LoginSuccess = { user: User; token: string; mustChangePassword?: boolean };
+/** 2차 인증이 필요하면 세션 토큰 대신 5분짜리 중간 토큰(mfaToken)이 온다 */
+export type LoginResponse =
+  | (LoginSuccess & { mfaRequired?: undefined; mfaSetupRequired?: undefined; mfaToken?: undefined })
+  | { mfaRequired: true; mfaSetupRequired?: undefined; mfaToken: string }
+  | { mfaSetupRequired: true; mfaRequired?: undefined; mfaToken: string };
+export type MfaStatus = { enabled: boolean; required: boolean; recoveryCodesLeft: number };
 
 export type User = { id: string; email: string; name: string; phone?: string | null; extension?: string | null; deskPhone?: string | null; jobTitle?: string | null; createdAt?: string; isAdmin?: boolean; statusMessage?: string | null; statusNote?: string | null; notepad?: string | null; avatarUrl?: string; mustChangePassword?: boolean };
 
@@ -401,7 +410,25 @@ export const authApi = {
     api.put('/auth/password', { currentPassword, newPassword }) as Promise<{ ok: boolean }>,
   passwordPolicy: () => api.get('/auth/password-policy') as Promise<PasswordPolicy>,
   login: (email: string, password: string) =>
-    api.post('/auth/login', { email, password }) as Promise<{ user: User; token: string; mustChangePassword?: boolean }>,
+    api.post('/auth/login', { email, password }) as Promise<LoginResponse>,
+  /** 현재 세션을 유지한 채 비밀번호만 확인 (화면 잠금 해제용 — /auth/login 재호출은 세션을 지운다) */
+  verifyPassword: (password: string) =>
+    api.post('/auth/verify-password', { password }) as Promise<{ ok: boolean }>,
+  /** 2차 인증 2단계 — 로그인 응답과 같은 형태를 돌려준다 */
+  mfaVerify: (mfaToken: string, code: string) =>
+    api.post('/auth/mfa/verify', { mfaToken, code }) as Promise<LoginSuccess>,
+  mfaStatus: () => api.get('/auth/mfa/status') as Promise<MfaStatus>,
+  /** mfaToken이 있으면 로그인 도중(강제 등록), 없으면 로그인한 세션으로 호출 */
+  mfaSetupStart: (mfaToken?: string) =>
+    api.post('/auth/mfa/setup/start', mfaToken ? { mfaToken } : {}) as Promise<{ secret: string; otpauthUrl: string }>,
+  mfaSetupConfirm: (code: string, mfaToken?: string) =>
+    api.post('/auth/mfa/setup/confirm', mfaToken ? { code, mfaToken } : { code }) as Promise<
+      { ok?: boolean; recoveryCodes: string[] } & Partial<LoginSuccess>
+    >,
+  mfaDisable: (password: string, code: string) =>
+    api.post('/auth/mfa/disable', { password, code }) as Promise<{ ok: boolean }>,
+  mfaRegenerateRecoveryCodes: (password: string, code: string) =>
+    api.post('/auth/mfa/recovery-codes', { password, code }) as Promise<{ recoveryCodes: string[] }>,
   register: (email: string, password: string, name: string) =>
     api.post('/auth/register', { email, password, name }) as Promise<{ user: User; token: string }>,
   me: () => api.get('/auth/me') as Promise<{ user: User }>,
@@ -444,6 +471,9 @@ export const usersApi = {
       name: string;
       email: string;
     }>,
+  /** 2차 인증 초기화 (관리자 전용) — 인증 앱을 잃어버린 사용자용. 대상 사용자의 세션은 모두 끊긴다. */
+  resetMfa: (id: string) =>
+    api.post(`/users/${id}/reset-mfa`, {}) as Promise<{ ok: boolean; name: string; email: string; wasEnabled: boolean }>,
   /** 삭제 시 함께 사라지는 데이터 (관리자 전용) */
   deleteImpact: (id: string) => api.get(`/users/${id}/impact`) as Promise<UserDeleteImpact>,
   /**
@@ -631,6 +661,37 @@ export type AnnouncementItem = {
   updatedAt: string;
 };
 
+export type FileTransferPolicy = {
+  enabled: boolean;
+  maxSizeMB: number;
+  blockedExtensions: string[];
+  allowedExtensions: string[];
+};
+export type SecurityPolicy = {
+  /** 입력이 없으면 화면을 잠그는 시간(분). 0이면 사용 안 함 */
+  screenLockMinutes: number;
+  twoFactor: 'optional' | 'required';
+  fileTransfer: FileTransferPolicy;
+  alwaysBlockedExtensions: string[];
+};
+export type SecurityPolicyPatch = {
+  screenLockMinutes?: number;
+  twoFactor?: 'optional' | 'required';
+  fileTransfer?: Partial<FileTransferPolicy>;
+};
+export type FileAuditEntry = {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  roomId: string | null;
+  fileName: string;
+  fileSize: number;
+  allowed: boolean;
+  reason: string | null;
+  createdAt: string;
+};
+
 export const appSettingsApi = {
   getExternalSite: () => api.get('/settings/external-site') as Promise<{ url: string }>,
   putExternalSite: (url: string) =>
@@ -641,7 +702,34 @@ export const appSettingsApi = {
   getGroupwareUrl: () => api.get('/settings/groupware-url') as Promise<{ url: string }>,
   putGroupwareUrl: (url: string) =>
     api.put('/settings/groupware-url', { url }) as Promise<{ url: string }>,
+  getSecurity: () => api.get('/settings/security') as Promise<SecurityPolicy>,
+  putSecurity: (patch: SecurityPolicyPatch) => api.put('/settings/security', patch) as Promise<SecurityPolicy>,
+  fileAudit: (opts: { blockedOnly?: boolean; limit?: number } = {}) =>
+    api.get(
+      `/settings/file-audit?limit=${opts.limit ?? 50}${opts.blockedOnly ? '&blockedOnly=1' : ''}`,
+    ) as Promise<FileAuditEntry[]>,
 };
+
+let securityPolicyCache: { at: number; policy: SecurityPolicy } | null = null;
+const SECURITY_POLICY_TTL_MS = 60_000;
+
+/** 보안 정책을 1분간 캐시해서 돌려준다. 실패하면 null(호출 측은 서버 검증에 맡긴다). */
+export async function getCachedSecurityPolicy(force = false): Promise<SecurityPolicy | null> {
+  if (!force && securityPolicyCache && Date.now() - securityPolicyCache.at < SECURITY_POLICY_TTL_MS) {
+    return securityPolicyCache.policy;
+  }
+  try {
+    const policy = await appSettingsApi.getSecurity();
+    securityPolicyCache = { at: Date.now(), policy };
+    return policy;
+  } catch {
+    return securityPolicyCache?.policy ?? null;
+  }
+}
+
+export function clearSecurityPolicyCache(): void {
+  securityPolicyCache = null;
+}
 
 export const announcementApi = {
   get: () => api.get('/announcement') as Promise<{
@@ -717,7 +805,12 @@ export const roomsApi = {
 };
 
 export const filesApi = {
-  upload: (roomId: string, file: File, onProgress?: (percent: number) => void, content?: string) => {
+  async upload(roomId: string, file: File, onProgress?: (percent: number) => void, content?: string) {
+    // 정책에 막힐 파일을 (수 GB여도) 끝까지 올리고 나서야 알게 되지 않도록 먼저 검사한다.
+    // 최종 강제는 서버가 하므로, 정책을 못 읽어오면 검사를 건너뛰고 서버에 맡긴다.
+    const policy = await getCachedSecurityPolicy();
+    const verdict = policy ? evaluateFilePolicy(file, policy) : null;
+    if (verdict) throw new Error(verdict);
     const formData = new FormData();
     formData.append('roomId', roomId);
     formData.append('file', file);

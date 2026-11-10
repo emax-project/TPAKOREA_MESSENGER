@@ -12,6 +12,7 @@ import UIModal from '../../../components/ui/UIModal';
 import { useAccentStyles } from '../../../hooks/useAccentStyles';
 import AdminSection from './AdminSection';
 import PasswordChangeModal from './PasswordChangeModal';
+import MfaSettingsModal from './MfaSettingsModal';
 
 type StatusOption = { id: string; label: string };
 
@@ -121,6 +122,7 @@ function ProfileActions({ isDark }: { isDark: boolean }) {
   const accent = useAccentStyles(isDark);
   const [editOpen, setEditOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
+  const [mfaOpen, setMfaOpen] = useState(false);
 
   const btnStyle = {
     flex: 1,
@@ -154,8 +156,17 @@ function ProfileActions({ isDark }: { isDark: boolean }) {
       >
         비밀번호 변경
       </button>
+      <button
+        type="button"
+        style={{ ...btnStyle, ...accent.secondaryStyle }}
+        className="transition-colors hover:brightness-95"
+        onClick={() => setMfaOpen(true)}
+      >
+        2차 인증
+      </button>
       {editOpen && <ProfileEditModal isDark={isDark} onClose={() => setEditOpen(false)} />}
       {pwOpen && <PasswordChangeModal isDark={isDark} onClose={() => setPwOpen(false)} />}
+      {mfaOpen && <MfaSettingsModal isDark={isDark} onClose={() => setMfaOpen(false)} />}
     </>
   );
 }

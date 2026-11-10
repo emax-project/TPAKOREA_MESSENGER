@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
-import { upload, UPLOAD_DIR } from '../upload.js';
+import { policyUpload, recordFileAudit, UPLOAD_DIR } from '../upload.js';
 
 export const filesRouter = Router();
 
@@ -23,7 +23,7 @@ filesRouter.post('/upload', (req, res, next) => {
   req.setTimeout(FILE_UPLOAD_TIMEOUT_MS);
   res.setTimeout(FILE_UPLOAD_TIMEOUT_MS);
   next();
-}, upload.single('file'), async (req, res) => {
+}, policyUpload('file'), async (req, res) => {
   try {
     const { roomId } = req.body;
     if (!roomId) {
@@ -72,6 +72,14 @@ filesRouter.post('/upload', (req, res, next) => {
     await prisma.roomMember.updateMany({
       where: { roomId, userId: req.userId },
       data: { lastReadAt: now },
+    });
+
+    void recordFileAudit({
+      userId: req.userId,
+      roomId,
+      fileName: originalName,
+      fileSize: req.file.size,
+      allowed: true,
     });
 
     const jsonMessage = toJson(message);

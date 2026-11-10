@@ -71,6 +71,14 @@ function CaretIcon({ up }: { up: boolean }) {
 }
 
 /** 비밀번호 초기화 */
+function ShieldIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5l8-3z" />
+    </svg>
+  );
+}
+
 function KeyIcon() {
   return (
     <svg
@@ -175,6 +183,25 @@ function UserManageSection({ isDark, isNarrowLayout = false, currentUserId, embe
     try {
       const r = await usersApi.resetPassword(user.id, password);
       setNotice(`'${r.name}'의 비밀번호를 바꿨습니다. 새 비밀번호로 다시 로그인하도록 안내해 주세요.`);
+    } catch (e) {
+      setError(friendlyError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyMfaReset = async (user: OrgUser) => {
+    setError(null);
+    setNotice(null);
+    if (!window.confirm(`'${user.name}'의 2차 인증을 초기화합니다.\n이 사용자의 로그인 세션이 모두 끊기고, 인증 앱을 다시 등록해야 합니다.`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await usersApi.resetMfa(user.id);
+      setNotice(r.wasEnabled
+        ? `'${r.name}'의 2차 인증을 초기화했습니다. 다음 로그인 때 다시 등록하도록 안내해 주세요.`
+        : `'${r.name}'은(는) 2차 인증을 쓰고 있지 않았습니다.`);
     } catch (e) {
       setError(friendlyError(e));
     } finally {
@@ -359,6 +386,19 @@ function UserManageSection({ isDark, isNarrowLayout = false, currentUserId, embe
                   )}
                 >
                   <KeyIcon />
+                </button>
+                <button
+                  type="button"
+                  title="2차 인증 초기화"
+                  aria-label={`${u.name} 2차 인증 초기화`}
+                  disabled={busy}
+                  onClick={() => { void applyMfaReset(u); }}
+                  className={cn(
+                    'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border-none bg-transparent p-0 cursor-pointer disabled:opacity-40',
+                    isDark ? 'text-slate-300 hover:bg-slate-700' : accent.custom ? 'text-[var(--color-brand-dark)] hover:bg-[rgba(var(--color-brand-dark-rgb),0.1)]' : 'text-slate-500 hover:bg-slate-200',
+                  )}
+                >
+                  <ShieldIcon />
                 </button>
               </div>
             ))}

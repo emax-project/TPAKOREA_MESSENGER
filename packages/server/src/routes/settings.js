@@ -3,6 +3,7 @@ import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
 import { assertAdmin } from '../lib/admin.js';
 import { isBlockedHostname } from '../lib/ssrfGuard.js';
+import { ALWAYS_BLOCKED_EXTENSIONS, getSecurityPolicy, saveSecurityPolicy } from '../lib/securityPolicy.js';
 
 export const settingsRouter = Router();
 settingsRouter.use(authMiddleware);
@@ -89,3 +90,68 @@ registerLinkSetting('/external-site', EXTERNAL_SITE_KEY, '링크');
 registerLinkSetting('/mail-site', MAIL_SITE_KEY, '메일 링크');
 /** 사이드바 "그룹웨어" 버튼 주소 (비어 있으면 버튼이 동작하지 않는다) */
 registerLinkSetting('/groupware-url', GROUPWARE_URL_KEY, '그룹웨어');
+
+/**
+ * 보안 정책 조회 (로그인한 모든 사용자) — 자동 화면 잠금 시간, 2차 인증 정책, 파일 전송 통제.
+ * 클라이언트는 이 값으로 잠금 타이머를 돌리고 업로드 전에 파일을 미리 검사한다
+ * (최종 강제는 항상 서버가 한다).
+ */
+settingsRouter.get('/security', async (_req, res) => {
+  try {
+    const policy = await getSecurityPolicy();
+    return res.json({ ...policy, alwaysBlockedExtensions: ALWAYS_BLOCKED_EXTENSIONS });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: '보안 설정을 불러오지 못했습니다' });
+  }
+});
+
+/** 보안 정책 저장 (관리자만). 일부 항목만 보내도 된다. */
+settingsRouter.put('/security', async (req, res) => {
+  try {
+    if (!(await assertAdmin(req, res))) return;
+    const saved = await saveSecurityPolicy(req.body);
+    if (saved.error) return res.status(400).json({ error: saved.error });
+    console.log(`[admin] 보안 정책 변경: lock=${saved.screenLockMinutes}분, 2FA=${saved.twoFactor}, 파일전송=${saved.fileTransfer.enabled ? `허용(${saved.fileTransfer.maxSizeMB}MB)` : '차단'}`);
+    return res.json({ ...saved, alwaysBlockedExtensions: ALWAYS_BLOCKED_EXTENSIONS });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: '보안 설정을 저장하지 못했습니다' });
+  }
+});
+
+/** 파일 전송 감사 로그 (관리자만) — 최근순. ?blockedOnly=1 이면 차단 이력만. ?limit= (최대 200) */
+settingsRouter.get('/file-audit', async (req, res) => {
+  try {
+    if (!(await assertAdmin(req, res))) return;
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const where = req.query.blockedOnly === '1' ? { allowed: false } : {};
+    const rows = await prisma.fileTransferAudit.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    const users = await prisma.user.findMany({
+      where: { id: { in: [...new Set(rows.map((r) => r.userId))] } },
+      select: { id: true, name: true, email: true },
+    });
+    const byId = new Map(users.map((u) => [u.id, u]));
+    return res.json(
+      rows.map((r) => ({
+        id: r.id,
+        userId: r.userId,
+        userName: byId.get(r.userId)?.name ?? '(삭제된 사용자)',
+        userEmail: byId.get(r.userId)?.email ?? '',
+        roomId: r.roomId,
+        fileName: r.fileName,
+        fileSize: Number(r.fileSize),
+        allowed: r.allowed,
+        reason: r.reason,
+        createdAt: r.createdAt,
+      })),
+    );
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: '감사 로그를 불러오지 못했습니다' });
+  }
+});

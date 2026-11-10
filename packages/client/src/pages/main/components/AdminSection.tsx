@@ -7,6 +7,7 @@ import { useToastStore } from '../../../store';
 import BulkUserRegisterSection from './BulkUserRegisterSection';
 import OrgManageSection from './OrgManageSection';
 import UserManageSection from './UserManageSection';
+import SecurityPolicySection from './SecurityPolicySection';
 
 type Props = {
   isDark: boolean;
@@ -157,6 +158,8 @@ function AdminSection({ isDark, isNarrowLayout = false, currentUserId }: Props) 
         load={appSettingsApi.getGroupwareUrl}
         store={appSettingsApi.putGroupwareUrl}
       />
+
+      <SecurityPolicySection isDark={isDark} />
 
       <div
         role="tablist"

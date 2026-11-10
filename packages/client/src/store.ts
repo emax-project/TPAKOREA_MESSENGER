@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client';
 import { authApi, getBaseUrl, type User } from './api';
 import { clearSessionDate, getActiveToken, markSessionToday, removeStoredToken, setStoredToken, setTrustedBaseUrl } from './utils/authSession';
 import type { OrgThemeId } from './utils/orgTheme';
+import { useScreenLockStore } from './utils/screenLock';
 
 type AuthState = {
   user: User | null;
@@ -43,6 +44,8 @@ export const useAuthStore = create<AuthState>()(
         clearSessionDate();
         window.electronAPI?.clearAppCache?.().catch(() => {});
         window.electronAPI?.clearGroupwareCredentials?.().catch(() => {});
+        // 다음 사용자가 잠긴 화면을 물려받지 않도록 잠금 상태도 함께 지운다
+        useScreenLockStore.getState().unlock();
         set({ user: null, token: null, mustChangePassword: false });
       },
     }),

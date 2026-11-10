@@ -58,6 +58,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('tray-logout', listener);
     return () => ipcRenderer.removeListener('tray-logout', listener);
   },
+  // OS 화면 잠금·절전 진입 시 메인 프로세스가 보내는 신호 — 앱도 함께 잠근다
+  onSystemLock: (handler) => {
+    const listener = () => handler();
+    ipcRenderer.on('system-lock', listener);
+    return () => ipcRenderer.removeListener('system-lock', listener);
+  },
   onNavigateToRoom: (handler) => {
     const listener = (_, roomId) => handler(roomId);
     ipcRenderer.on('navigate-to-room', listener);
