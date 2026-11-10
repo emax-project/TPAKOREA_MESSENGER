@@ -310,6 +310,8 @@ export type Room = {
 
 export type Message = {
   id: string;
+  /** 보낸 사람이 만든 전송 고유 키(재전송 중복 방지용). 키를 안 보내는 구버전이 보낸 메시지는 null */
+  clientMessageId?: string | null;
   roomId: string;
   senderId: string;
   content: string;

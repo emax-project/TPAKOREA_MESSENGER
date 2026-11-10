@@ -1,5 +1,4 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
-import type { Socket } from 'socket.io-client';
+import type { Dispatch, SetStateAction } from 'react';
 import type { Message, ReactionGroup, Room } from '../../../api';
 import EventCard from '../../../components/EventCard';
 import PollCard from '../../../components/PollCard';
@@ -19,7 +18,8 @@ type BoardMessageListProps = {
   handleReaction: (messageId: string, emoji: string) => void | Promise<void>;
   boardCommentInputs: Record<string, string>;
   setBoardCommentInputs: Dispatch<SetStateAction<Record<string, string>>>;
-  socketRef: MutableRefObject<Socket | null>;
+  /** 서버 확인·재전송을 거치는 전송 함수(ChatWindow의 useMessageSender) */
+  onSendMessage: (payload: { roomId: string; content: string; replyToId?: string }) => string;
   roomId?: string;
 };
 
@@ -34,7 +34,7 @@ export default function BoardMessageList({
   handleReaction,
   boardCommentInputs,
   setBoardCommentInputs,
-  socketRef,
+  onSendMessage,
   roomId,
 }: BoardMessageListProps) {
   return (
@@ -271,8 +271,8 @@ export default function BoardMessageList({
                     if ((e.nativeEvent as KeyboardEvent).isComposing) return;
                     e.preventDefault();
                     const text = (boardCommentInputs[m.id] || '').trim();
-                    if (text && socketRef.current && roomId) {
-                      socketRef.current.emit('message', { roomId, content: text, replyToId: m.id });
+                    if (text && roomId) {
+                      onSendMessage({ roomId, content: text, replyToId: m.id });
                       setBoardCommentInputs((prev) => ({ ...prev, [m.id]: '' }));
                     }
                   }
@@ -283,8 +283,8 @@ export default function BoardMessageList({
                 className={cn('py-1.5 px-3.5 border-none rounded-2xl text-white text-xs font-semibold cursor-pointer shrink-0', 'bg-brand-dark')}
                 onClick={() => {
                   const text = (boardCommentInputs[m.id] || '').trim();
-                  if (text && socketRef.current && roomId) {
-                    socketRef.current.emit('message', { roomId, content: text, replyToId: m.id });
+                  if (text && roomId) {
+                    onSendMessage({ roomId, content: text, replyToId: m.id });
                     setBoardCommentInputs((prev) => ({ ...prev, [m.id]: '' }));
                   }
                 }}

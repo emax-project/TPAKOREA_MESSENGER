@@ -176,6 +176,8 @@ model Message {
   contextFilePath  String?   // 컨텍스트 스택: 파일 경로
   contextLine      Int?      // 컨텍스트 스택: 라인 번호
   contextBranch    String?   // 컨텍스트 스택: 브랜치
+  /// 보낸 사람이 만든 전송 고유 키. 네트워크 끊김 등으로 같은 메시지를 다시 보내도 한 번만 저장하기 위한 멱등 키
+  clientMessageId  String?
   bookmarks        Bookmark[]
   mentions         Mention[]
   replyTo          Message?        @relation("Reply", fields: [replyToId], references: [id])
@@ -192,6 +194,7 @@ model Message {
   @@index([roomId, createdAt])
   @@index([roomId, senderId, createdAt])
   @@index([fileExpiresAt])
+  @@unique([senderId, clientMessageId])
 }
 
 model Event {

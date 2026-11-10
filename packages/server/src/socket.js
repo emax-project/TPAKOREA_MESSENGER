@@ -1,6 +1,7 @@
 import { prisma } from './db.js';
 import * as onlineUsers from './onlineUsers.js';
 import { sendPushToRoom } from './push.js';
+import { parseClientMessageId, isUniqueViolation } from './lib/clientMessageId.js';
 
 // viewing_room: userId -> Set<roomId> (사용자가 현재 보고 있는 방)
 const viewingRooms = new Map();
@@ -113,18 +114,43 @@ export function registerSocketHandlers(io) {
       }
     });
 
-    socket.on('message', async (payload) => {
-      const { roomId, content, sharedEvent, replyToId, context } = payload;
+    // 전송 확인(ack): 클라이언트가 응답 콜백을 넘기면 저장 결과를 돌려준다.
+    //   { ok: true, id, createdAt, duplicate } | { ok: false, code }
+    // 콜백이 없는 구버전 클라이언트는 예전처럼 응답 없이 동작한다.
+    socket.on('message', async (payload, ack) => {
+      const reply = typeof ack === 'function' ? ack : () => {};
+      const { roomId, content, sharedEvent, replyToId, context, clientMessageId } = payload || {};
       const text = typeof content === 'string' ? content : '';
       const hasEvent = sharedEvent && typeof sharedEvent === 'object' && sharedEvent.title != null && sharedEvent.startAt != null && sharedEvent.endAt != null;
-      if (!roomId || (text === '' && !hasEvent) || socket.userId == null) return;
+      const cid = parseClientMessageId(clientMessageId);
+      if (!roomId || (text === '' && !hasEvent) || socket.userId == null || !cid.ok) {
+        reply({ ok: false, code: 'INVALID' });
+        return;
+      }
+      /** 이미 저장된 같은 키의 메시지가 있으면 그 결과를 돌려준다(재전송 중복 방지) */
+      const findDuplicate = async () => {
+        if (!cid.value) return null;
+        return prisma.message.findUnique({
+          where: { senderId_clientMessageId: { senderId: socket.userId, clientMessageId: cid.value } },
+          select: { id: true, createdAt: true },
+        });
+      };
       try {
-        if (!(await isRoomMember(roomId, socket.userId))) return;
+        if (!(await isRoomMember(roomId, socket.userId))) {
+          reply({ ok: false, code: 'NOT_MEMBER' });
+          return;
+        }
+        const duplicate = await findDuplicate();
+        if (duplicate) {
+          reply({ ok: true, id: duplicate.id, createdAt: duplicate.createdAt, duplicate: true });
+          return;
+        }
         const data = {
           roomId,
           senderId: socket.userId,
           content: text || (hasEvent ? '[일정 공유]' : ''),
         };
+        if (cid.value) data.clientMessageId = cid.value;
         if (hasEvent) {
           data.eventTitle = String(sharedEvent.title);
           data.eventStartAt = new Date(sharedEvent.startAt);
@@ -155,20 +181,33 @@ export function registerSocketHandlers(io) {
             data.contextBranch = context.branch.trim().slice(0, 200);
           }
         }
-        const message = await prisma.message.create({
-          data,
-          include: {
-            sender: { select: { id: true, name: true, email: true, avatarUrl: true, updatedAt: true } },
-            replyTo: {
-              select: {
-                id: true,
-                content: true,
-                deletedAt: true,
-                sender: { select: { id: true, name: true } },
+        let message;
+        try {
+          message = await prisma.message.create({
+            data,
+            include: {
+              sender: { select: { id: true, name: true, email: true, avatarUrl: true, updatedAt: true } },
+              replyTo: {
+                select: {
+                  id: true,
+                  content: true,
+                  deletedAt: true,
+                  sender: { select: { id: true, name: true } },
+                },
               },
             },
-          },
-        });
+          });
+        } catch (createErr) {
+          // 같은 키의 재전송이 동시에 도착해 다른 요청이 먼저 저장한 경우 — 새로 만들지 않고 기존 결과를 돌려준다
+          if (cid.value && isUniqueViolation(createErr)) {
+            const existing = await findDuplicate();
+            if (existing) {
+              reply({ ok: true, id: existing.id, createdAt: existing.createdAt, duplicate: true });
+              return;
+            }
+          }
+          throw createErr;
+        }
         const sVer = message.sender?.updatedAt ? `?v=${new Date(message.sender.updatedAt).getTime()}` : '';
         const senderForClient = message.sender ? {
           id: message.sender.id,
@@ -194,6 +233,8 @@ export function registerSocketHandlers(io) {
           reactions: [],
           poll: null,
         });
+        // 저장·브로드캐스트까지 끝났음을 보낸 사람에게 확인(ack)
+        reply({ ok: true, id: message.id, createdAt: message.createdAt, duplicate: false });
 
         // room/mention/푸시는 백그라운드에서 처리 (다음 메시지 처리 블로킹 안 함)
         (async () => {
@@ -247,6 +288,7 @@ export function registerSocketHandlers(io) {
           }
         })();
       } catch (e) {
+        reply({ ok: false, code: 'SERVER' });
         socket.emit('error', { code: 'MESSAGE_CREATE', message: e.message });
       }
     });

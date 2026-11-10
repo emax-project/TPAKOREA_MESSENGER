@@ -3,6 +3,8 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { Socket } from 'socket.io-client';
 import { useAuthStore, useThemeStore, useToastStore } from '../store';
+import { useMessageSender } from './chat-window/hooks/useMessageSender';
+import PendingSendBar from './chat-window/components/PendingSendBar';
 import { roomsApi, filesApi, eventsApi, pollsApi, projectsApi, type Room, type Message } from '../api';
 import FileUploadButton from '../components/FileUploadButton';
 import InviteModal from '../components/InviteModal';
@@ -90,6 +92,7 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
   // 임베디드(모바일 셸)이거나 좁은 창에서는 컴팩트 헤더
   const isCompactHeader = embedded || viewportWidth < 980;
   const socketRef = useRef<Socket | null>(null);
+  const { pending: pendingSends, send: sendOutgoing, retry: retryOutgoing, dismiss: dismissOutgoing } = useMessageSender(socketRef);
   // 보드뷰 전용 — 챗뷰는 ChatBubbleList 내부의 Virtuoso가 스크롤을 직접 관리한다
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -361,9 +364,8 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
       return;
     }
 
-    // 텍스트만 전송 (socketRef 사용 - stale closure 방지)
-    const s = socketRef.current;
-    if (!text || !roomId || !s) return;
+    // 텍스트만 전송 — 서버 확인(ack)을 기다리고 끊기면 같은 키로 자동 재전송한다
+    if (!text || !roomId) return;
     const payload: { roomId: string; content: string; replyToId?: string; context?: { filePath?: string; line?: number; branch?: string } } = {
       roomId,
       content: text,
@@ -376,7 +378,7 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
         branch: messageContext.branch || undefined,
       };
     }
-    s.emit('message', payload);
+    sendOutgoing(payload);
     if (myId) queryClient.invalidateQueries({ queryKey: ['rooms', myId], exact: true });
     setInput('');
     setReplyTo(null);
@@ -795,7 +797,7 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
                 handleReaction={handleReaction}
                 boardCommentInputs={boardCommentInputs}
                 setBoardCommentInputs={setBoardCommentInputs}
-                socketRef={socketRef}
+                onSendMessage={sendOutgoing}
                 roomId={roomId}
               />
               <div ref={messagesEndRef} />
@@ -945,8 +947,8 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
                       role="button"
                       tabIndex={0}
                       onClick={() => {
-                        if (!socketRef.current || !roomId) return;
-                        socketRef.current.emit('message', { roomId, content: '', sharedEvent: { title: ev.title, startAt: ev.startAt, endAt: ev.endAt, description: ev.description ?? '' } });
+                        if (!roomId) return;
+                        sendOutgoing({ roomId, content: '', sharedEvent: { title: ev.title, startAt: ev.startAt, endAt: ev.endAt, description: ev.description ?? '' } });
                         if (myId) queryClient.invalidateQueries({ queryKey: ['rooms', myId], exact: true });
                         setShareEventOpen(false);
                       }}
@@ -988,6 +990,9 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
             <MentionPopup members={members} query={mentionQuery} onSelect={handleMentionSelect} />
           )}
         </div>
+
+        {/* 서버 확인을 못 받았거나 실패한 메시지 */}
+        <PendingSendBar items={pendingSends} isDark={isDark} onRetry={retryOutgoing} onDismiss={dismissOutgoing} />
 
         {/* 첨부 파일 프리뷰 바 */}
         {pendingFiles.length > 0 && (
