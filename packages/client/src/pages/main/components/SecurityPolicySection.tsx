@@ -10,6 +10,7 @@ const REASON_LABEL: Record<string, string> = {
   FILE_TYPE_NOT_ALLOWED: '허용 목록 밖',
   FILE_TOO_LARGE: '크기 초과',
   FILE_TRANSFER_DISABLED: '전송 제한',
+  FILE_DOWNLOAD_DISABLED: '다운로드 제한',
 };
 
 /** "zip, .iso\n7z" 같은 입력을 확장자 배열로. 형식이 틀리면 서버가 검증해서 알려준다. */
@@ -34,6 +35,8 @@ export default function SecurityPolicySection({ isDark }: { isDark: boolean }) {
   const [lockMinutes, setLockMinutes] = useState('10');
   const [twoFactor, setTwoFactor] = useState<SecurityPolicy['twoFactor']>('optional');
   const [ftEnabled, setFtEnabled] = useState(true);
+  const [dlEnabled, setDlEnabled] = useState(true);
+  const [maxWindows, setMaxWindows] = useState('0');
   const [maxSizeMB, setMaxSizeMB] = useState('2048');
   const [blocked, setBlocked] = useState('');
   const [allowed, setAllowed] = useState('');
@@ -46,6 +49,8 @@ export default function SecurityPolicySection({ isDark }: { isDark: boolean }) {
     setLockMinutes(String(data.screenLockMinutes));
     setTwoFactor(data.twoFactor);
     setFtEnabled(data.fileTransfer.enabled);
+    setDlEnabled(data.fileTransfer.downloadEnabled);
+    setMaxWindows(String(data.maxChatWindows));
     setMaxSizeMB(String(data.fileTransfer.maxSizeMB));
     setBlocked(data.fileTransfer.blockedExtensions.join(', '));
     setAllowed(data.fileTransfer.allowedExtensions.join(', '));
@@ -63,8 +68,10 @@ export default function SecurityPolicySection({ isDark }: { isDark: boolean }) {
       const saved = await appSettingsApi.putSecurity({
         screenLockMinutes: Number(lockMinutes),
         twoFactor,
+        maxChatWindows: Number(maxWindows),
         fileTransfer: {
           enabled: ftEnabled,
+          downloadEnabled: dlEnabled,
           maxSizeMB: Number(maxSizeMB),
           blockedExtensions: parseExtensionInput(blocked),
           allowedExtensions: parseExtensionInput(allowed),
@@ -117,11 +124,21 @@ export default function SecurityPolicySection({ isDark }: { isDark: boolean }) {
         <span className={cn('text-xs', muted)}>필수로 바꾸면 아직 등록하지 않은 사용자는 다음 로그인 때 인증 앱을 등록해야 로그인할 수 있습니다.</span>
       </label>
 
+      <label className="flex flex-col gap-1">
+        <span className={cn('text-xs font-semibold', title)}>동시에 열 수 있는 대화창 수</span>
+        <input type="number" min={0} max={20} value={maxWindows} onChange={(e) => setMaxWindows(e.target.value)} style={{ ...field, width: 120 }} />
+        <span className={cn('text-xs', muted)}>창이 많을수록 메모리·CPU를 더 씁니다. 0이면 제한하지 않습니다.</span>
+      </label>
+
       <div className="flex flex-col gap-2">
         <span className={cn('text-xs font-semibold', title)}>파일 전송 통제</span>
         <label className={cn('flex items-center gap-2 text-xs', title)}>
           <input type="checkbox" checked={ftEnabled} onChange={(e) => setFtEnabled(e.target.checked)} className="h-4 w-4" />
-          파일 전송 허용
+          파일 보내기(업로드) 허용
+        </label>
+        <label className={cn('flex items-center gap-2 text-xs', title)}>
+          <input type="checkbox" checked={dlEnabled} onChange={(e) => setDlEnabled(e.target.checked)} className="h-4 w-4" />
+          파일 내려받기(다운로드) 허용
         </label>
         <label className="flex flex-col gap-1">
           <span className={cn('text-xs', muted)}>파일 1개 최대 크기 (MB, 최대 2048)</span>

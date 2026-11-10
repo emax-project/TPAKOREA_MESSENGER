@@ -64,6 +64,15 @@ export default function ScreenLockGate() {
     return window.electronAPI?.onSystemLock?.(() => lock());
   }, [lock]);
 
+  // 메인 프로세스에 알림: 잠금 상태(잠긴 동안 알림에 대화 내용이 보이지 않게), 대화창 수 제한 정책
+  useEffect(() => {
+    window.electronAPI?.setScreenLocked?.(locked);
+  }, [locked]);
+  const maxChatWindows = policy?.maxChatWindows;
+  useEffect(() => {
+    if (typeof maxChatWindows === 'number') window.electronAPI?.setMaxChatWindows?.(maxChatWindows);
+  }, [maxChatWindows]);
+
   // 잠긴 동안 앱 본문을 inert 처리(포커스·클릭·보조기술 접근 차단)
   useEffect(() => {
     const root = document.getElementById('root');

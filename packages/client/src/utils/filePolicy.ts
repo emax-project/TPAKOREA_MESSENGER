@@ -12,7 +12,11 @@ function extOf(name: string): string {
  */
 export function evaluateFilePolicy(
   file: { name: string; size: number },
-  policy: Pick<SecurityPolicy, 'fileTransfer' | 'alwaysBlockedExtensions'>,
+  policy: {
+    alwaysBlockedExtensions: SecurityPolicy['alwaysBlockedExtensions'];
+    // 보내기(업로드) 검사에 쓰는 항목만 필요하다 — 내려받기 허용 여부는 서버가 판단한다
+    fileTransfer: Omit<SecurityPolicy['fileTransfer'], 'downloadEnabled'>;
+  },
 ): string | null {
   const ft = policy.fileTransfer;
   if (!ft.enabled) return '파일 전송이 관리자에 의해 제한되어 있습니다';

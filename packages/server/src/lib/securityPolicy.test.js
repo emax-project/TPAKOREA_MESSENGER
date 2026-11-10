@@ -66,3 +66,15 @@ test('evaluateFile: 전송 전체 비활성화', () => {
   const policy = mergePolicy(DEFAULT_POLICY, { fileTransfer: { enabled: false } });
   assert.equal(evaluateFile({ name: 'a.pdf', size: 1 }, policy).code, 'FILE_TRANSFER_DISABLED');
 });
+
+test('mergePolicy: 다운로드 허용 여부와 대화창 수 제한', () => {
+  assert.equal(DEFAULT_POLICY.fileTransfer.downloadEnabled, true);
+  assert.equal(DEFAULT_POLICY.maxChatWindows, 0);
+  const next = mergePolicy(DEFAULT_POLICY, { maxChatWindows: 5, fileTransfer: { downloadEnabled: false } });
+  assert.equal(next.maxChatWindows, 5);
+  assert.equal(next.fileTransfer.downloadEnabled, false);
+  assert.equal(next.fileTransfer.enabled, true); // 업로드 허용은 그대로
+  assert.ok(mergePolicy(DEFAULT_POLICY, { maxChatWindows: -1 }).error);
+  assert.ok(mergePolicy(DEFAULT_POLICY, { maxChatWindows: 21 }).error);
+  assert.ok(mergePolicy(DEFAULT_POLICY, { maxChatWindows: 2.5 }).error);
+});

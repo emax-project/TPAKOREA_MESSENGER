@@ -19,8 +19,12 @@ export const DEFAULT_POLICY = Object.freeze({
   screenLockMinutes: 10,
   // optional: 사용자가 원하면 등록 / required: 모든 사용자가 등록해야 로그인 가능
   twoFactor: 'optional',
+  // 동시에 열 수 있는 대화창(별도 창) 수. 0이면 제한 없음. 창이 많을수록 메모리·CPU를 더 쓴다.
+  maxChatWindows: 0,
   fileTransfer: {
     enabled: true,
+    // 파일 내려받기 허용 여부(업로드와 별개)
+    downloadEnabled: true,
     maxSizeMB: 2048,
     // 추가 차단 확장자(위 필수 차단 목록에 더해짐)
     blockedExtensions: ['.jse', '.ps1', '.psm1', '.dll', '.sys', '.reg', '.lnk', '.hta'],
@@ -33,6 +37,7 @@ export const LIMITS = Object.freeze({
   screenLockMaxMinutes: 24 * 60,
   fileMaxSizeMB: 2048,
   maxExtensions: 200,
+  maxChatWindowsMax: 20,
 });
 
 export function normalizeExtension(raw) {
@@ -61,6 +66,7 @@ export function mergePolicy(base, patch) {
   const next = {
     screenLockMinutes: base.screenLockMinutes,
     twoFactor: base.twoFactor,
+    maxChatWindows: base.maxChatWindows,
     fileTransfer: { ...base.fileTransfer },
   };
   if (!patch || typeof patch !== 'object') return next;
@@ -78,10 +84,18 @@ export function mergePolicy(base, patch) {
     }
     next.twoFactor = patch.twoFactor;
   }
+  if (patch.maxChatWindows !== undefined) {
+    const n = Number(patch.maxChatWindows);
+    if (!Number.isInteger(n) || n < 0 || n > LIMITS.maxChatWindowsMax) {
+      return { error: `동시에 열 수 있는 대화창 수는 0~${LIMITS.maxChatWindowsMax}개 사이여야 합니다 (0 = 제한 없음)` };
+    }
+    next.maxChatWindows = n;
+  }
   const ft = patch.fileTransfer;
   if (ft !== undefined) {
     if (!ft || typeof ft !== 'object') return { error: '파일 전송 정책 값이 올바르지 않습니다' };
     if (ft.enabled !== undefined) next.fileTransfer.enabled = !!ft.enabled;
+    if (ft.downloadEnabled !== undefined) next.fileTransfer.downloadEnabled = !!ft.downloadEnabled;
     if (ft.maxSizeMB !== undefined) {
       const n = Number(ft.maxSizeMB);
       if (!Number.isInteger(n) || n < 1 || n > LIMITS.fileMaxSizeMB) {

@@ -64,6 +64,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('system-lock', listener);
     return () => ipcRenderer.removeListener('system-lock', listener);
   },
+  // 렌더러 → 메인: 잠금 상태(알림 내용 가리기용), 서버 정책의 대화창 수 제한
+  setScreenLocked: (locked) => ipcRenderer.send('set-screen-locked', !!locked),
+  setMaxChatWindows: (n) => ipcRenderer.send('set-max-chat-windows', n),
   onNavigateToRoom: (handler) => {
     const listener = (_, roomId) => handler(roomId);
     ipcRenderer.on('navigate-to-room', listener);

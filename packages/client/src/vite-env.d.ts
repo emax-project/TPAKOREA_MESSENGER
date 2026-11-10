@@ -41,6 +41,8 @@ interface Window {
     setTrustedBaseUrl?: (url: string) => Promise<boolean>;
     onLogout: (handler: () => void) => () => void;
     onSystemLock?: (handler: () => void) => () => void;
+    setScreenLocked?: (locked: boolean) => void;
+    setMaxChatWindows?: (n: number) => void;
     onNavigateToRoom: (handler: (roomId: string) => void) => () => void;
     getAppVersion: () => Promise<string>;
     getAppInfo: () => Promise<{ version: string; isPackaged: boolean; platform: string }>;

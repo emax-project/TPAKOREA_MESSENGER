@@ -15,6 +15,7 @@ app.setName('TPA-Korea');
 // 직접 끈 경우에만 소프트웨어 렌더링으로 내린다(정책은 gpuPolicy.js, 상태는 userData/gpu-state.json).
 // GPU 샌드박스는 끄지 않는다 — 예전 무조건 --disable-gpu-sandbox 설정은 보안만 약하게 만들었다.
 const gpuPolicy = require('./gpuPolicy');
+const policyHelpers = require('./policyHelpers');
 const GPU_STATE_FILE = path.join(app.getPath('userData'), 'gpu-state.json');
 
 function readGpuState() {
@@ -946,6 +947,20 @@ function openSecondWindow() {
 }
 
 function openChatWindow(roomId) {
+  const chatWindows = BrowserWindow.getAllWindows().filter(
+    (w) => !w.isDestroyed() && typeof w.__emaxInitialRoute === 'string' && w.__emaxInitialRoute.startsWith('/chat/'),
+  );
+  const existing = chatWindows.find((w) => w.__emaxInitialRoute === `/chat/${roomId}`);
+  if (existing) {
+    // 이미 열려 있는 방이면 새로 만들지 않고 그 창을 앞으로 가져온다
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return;
+  }
+  if (!policyHelpers.canOpenChatWindow(chatWindows.length, maxChatWindows)) {
+    showCustomNotification('CSIN-Tech', `대화창은 최대 ${maxChatWindows}개까지 열 수 있습니다. 다른 창을 닫고 다시 시도해 주세요.`);
+    return;
+  }
   createWindow({
     width: 480,
     height: 680,
@@ -1238,8 +1253,24 @@ ipcMain.on('emax-get-initial-route', (event) => {
   event.returnValue = win?.__emaxInitialRoute ?? null;
 });
 
+// 화면 잠금 상태(렌더러가 알려줌) — 잠겨 있으면 알림에 대화 내용·보낸 사람이 보이지 않게 한다
+let screenLocked = false;
+ipcMain.on('set-screen-locked', (_, locked) => {
+  screenLocked = locked === true;
+});
+
+// 서버 보안 정책의 "동시에 열 수 있는 대화창 수"(0 = 제한 없음). 렌더러가 정책을 받으면 알려준다.
+let maxChatWindows = 0;
+ipcMain.on('set-max-chat-windows', (_, value) => {
+  maxChatWindows = policyHelpers.sanitizeMaxChatWindows(value);
+});
+
 ipcMain.handle('show-notification', (_, { title, body, roomId, icon, imagePreview }) => {
-  showCustomNotification(title || 'TPA-Korea', body || '', { roomId: roomId || null, icon: icon || null, imagePreview: imagePreview || null });
+  const n = policyHelpers.maskNotificationIfLocked(
+    { title: title || 'TPA-Korea', body: body || '', roomId: roomId || null, icon: icon || null, imagePreview: imagePreview || null },
+    screenLocked,
+  );
+  showCustomNotification(n.title, n.body, { roomId: n.roomId, icon: n.icon, imagePreview: n.imagePreview });
 });
 
 // 앱 아이콘 배지 (맥 도크/윈도우 태스크바) - 안 읽은 개수를 그대로 표시
@@ -1411,8 +1442,41 @@ ipcMain.handle('fetch-user-avatar', async (_, { userId }) => {
   }
 });
 
+// 업데이트 설치 파일이 쌓이는 폴더 정리 (Windows: %LOCALAPPDATA%\csin-tech-updater\pending).
+// 이전 버전은 앱 이름이 'client'라 %LOCALAPPDATA%\client-updater 를 썼고 설치 파일(약 166MB)이 그대로 남아 있다.
+// - 현재 폴더: 가장 최근 설치 파일 1개(차등 업데이트 기준)만 남기고 나머지·미완성 파일 삭제
+// - 옛 폴더: 더 이상 쓰이지 않으므로 pending 안의 파일 모두 삭제
+function pruneUpdaterCache() {
+  if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) return;
+  const readFiles = (dir) => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isFile())
+        .map((e) => ({ name: e.name, mtimeMs: fs.statSync(path.join(dir, e.name)).mtimeMs }));
+    } catch {
+      return [];
+    }
+  };
+  const remove = (dir, names) => {
+    for (const name of names) {
+      try {
+        fs.unlinkSync(path.join(dir, name));
+        console.log('[updater-cache] 삭제:', name);
+      } catch (err) {
+        console.warn('[updater-cache] 삭제 실패:', name, err?.message);
+      }
+    }
+  };
+  const current = path.join(process.env.LOCALAPPDATA, 'csin-tech-updater', 'pending');
+  remove(current, policyHelpers.pickStaleUpdaterFiles(readFiles(current)));
+  const legacy = path.join(process.env.LOCALAPPDATA, 'client-updater', 'pending');
+  remove(legacy, readFiles(legacy).map((f) => f.name));
+}
+
 function setupAutoUpdate() {
   if (isDev || !app.isPackaged) return;
+  // 설치 직후·재실행 때 한 번 정리(업데이트 확인과 겹치지 않도록 잠시 뒤에)
+  setTimeout(pruneUpdaterCache, 60 * 1000);
   if (updaterBaseUrl) {
     // 업데이트 서버를 직접 지정하는 경우에도 평문(http)은 쓰지 않는다 — 중간자가 설치 파일을
     // 바꿔치기할 수 있다. https가 아니면 지정을 무시하고 기본(GitHub Releases) 경로를 쓴다.

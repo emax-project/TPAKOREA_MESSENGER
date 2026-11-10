@@ -663,6 +663,8 @@ export type AnnouncementItem = {
 
 export type FileTransferPolicy = {
   enabled: boolean;
+  /** 파일 내려받기 허용 여부(업로드와 별개) */
+  downloadEnabled: boolean;
   maxSizeMB: number;
   blockedExtensions: string[];
   allowedExtensions: string[];
@@ -671,12 +673,15 @@ export type SecurityPolicy = {
   /** 입력이 없으면 화면을 잠그는 시간(분). 0이면 사용 안 함 */
   screenLockMinutes: number;
   twoFactor: 'optional' | 'required';
+  /** 동시에 열 수 있는 대화창 수. 0이면 제한 없음 */
+  maxChatWindows: number;
   fileTransfer: FileTransferPolicy;
   alwaysBlockedExtensions: string[];
 };
 export type SecurityPolicyPatch = {
   screenLockMinutes?: number;
   twoFactor?: 'optional' | 'required';
+  maxChatWindows?: number;
   fileTransfer?: Partial<FileTransferPolicy>;
 };
 export type FileAuditEntry = {
