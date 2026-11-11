@@ -37,7 +37,7 @@
     "jsonwebtoken": "^9.0.2",
     "ldapts": "^7.4.0",
     "mssql": "^11.0.1",
-    "multer": "^2.0.2",
+    "multer": "^2.5.0",
     "node-cron": "^4.2.1",
     "socket.io": "^4.7.5"
   },
