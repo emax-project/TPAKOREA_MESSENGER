@@ -492,6 +492,7 @@ export const usersApi = {
       messageCount: number;
     }>,
   list: () => api.get('/users') as Promise<User[]>,
+  search: (query: string) => api.get(`/users?search=${encodeURIComponent(query)}`) as Promise<User[]>,
   bulkRegister: (data: { defaultPassword?: string; users: BulkRegisterUserInput[] }) =>
     api.post('/users/bulk', data) as Promise<BulkRegisterResult>,
   /** 직급은 여기서 바꿀 수 없다. 조직 마스터 값이라 관리자만 setJobTitle로 지정한다. */

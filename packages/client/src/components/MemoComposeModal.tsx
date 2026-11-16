@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { orgApi, memosApi, type OrgUser } from '../api';
+import { orgApi, memosApi, usersApi, type OrgUser } from '../api';
 import { useAuthStore, useThemeStore, useToastStore } from '../store';
 import UIButton from './ui/UIButton';
 import UIModal from './ui/UIModal';
@@ -21,6 +21,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
   const showToast = useToastStore((s) => s.show);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(initialRecipientIds));
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedProfiles, setSelectedProfiles] = useState<Record<string, OrgUser>>({});
   const [pickerOpen, setPickerOpen] = useState(false);
   const [orgPickerOpen, setOrgPickerOpen] = useState(false);
   const [collapsedDepartments, setCollapsedDepartments] = useState<Set<string>>(new Set());
@@ -43,20 +44,30 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
     return users;
   }, [orgTree, myId]);
 
+  const searchLower = searchQuery.trim().toLowerCase();
+  const { data: directoryMatches, isFetching: isSearching } = useQuery({
+    queryKey: ['users', 'memo-recipients', searchLower],
+    queryFn: () => usersApi.search(searchLower),
+    enabled: pickerOpen && !!searchLower,
+  });
+
   const usersById = useMemo(() => {
-    const map = new Map<string, OrgUser>();
+    const map = new Map<string, OrgUser>(Object.entries(selectedProfiles));
     allUsers.forEach((u) => map.set(u.id, u));
     return map;
-  }, [allUsers]);
+  }, [allUsers, selectedProfiles]);
 
   const selectedUsers = useMemo(
     () => [...selected].map((id) => usersById.get(id)).filter(Boolean) as OrgUser[],
     [selected, usersById],
   );
 
-  const searchLower = searchQuery.trim().toLowerCase();
   const suggestions = useMemo(() => {
-    return allUsers
+    const candidates = new Map(allUsers.map((user) => [user.id, user]));
+    for (const user of directoryMatches ?? []) {
+      if (user.id !== myId && !candidates.has(user.id)) candidates.set(user.id, user);
+    }
+    return [...candidates.values()]
       .filter((u) => !selected.has(u.id))
       .filter((u) => {
         if (!searchLower) return true;
@@ -66,10 +77,11 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
         );
       })
       .slice(0, 8);
-  }, [allUsers, selected, searchLower]);
+  }, [allUsers, directoryMatches, myId, selected, searchLower]);
 
-  const addUser = (userId: string) => {
-    setSelected((prev) => new Set(prev).add(userId));
+  const addUser = (user: OrgUser) => {
+    setSelectedProfiles((prev) => ({ ...prev, [user.id]: user }));
+    setSelected((prev) => new Set(prev).add(user.id));
     setSearchQuery('');
     searchInputRef.current?.focus();
   };
@@ -218,7 +230,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                   }
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    if (suggestions[0]) addUser(suggestions[0].id);
+                    if (suggestions[0]) addUser(suggestions[0]);
                   }
                   if (e.key === 'Escape') {
                     setPickerOpen(false);
@@ -247,7 +259,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                   </div>
                 ) : suggestions.length === 0 ? (
                   <div className={cn('px-3 py-3 text-sm', isDark ? 'text-slate-400' : 'text-slate-500')}>
-                    {searchLower ? '검색 결과가 없습니다' : '추가할 사람이 없습니다'}
+                    {isSearching ? '검색 중...' : searchLower ? '검색 결과가 없습니다' : '추가할 사람이 없습니다'}
                   </div>
                 ) : (
                   suggestions.map((u) => (
@@ -255,7 +267,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                       key={u.id}
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => addUser(u.id)}
+                      onClick={() => addUser(u)}
                       className={cn(
                         'flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left cursor-pointer',
                         isDark ? 'hover:bg-slate-700' : 'hover:bg-slate-50',
