@@ -1,3 +1,4 @@
+import UserAvatar from '../../../components/UserAvatar';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { Message, ReactionGroup, Room } from '../../../api';
@@ -242,9 +243,14 @@ const ChatBubbleList = forwardRef<ChatBubbleListHandle, ChatBubbleListProps>(fun
                 {!isMine && (
                   showSenderIdentity ? (
                     <div className="w-[34px] h-[34px] shrink-0" aria-hidden>
-                      <span className={cn('w-[34px] h-[34px] rounded-full flex items-center justify-center text-[13px] font-bold', isDark ? 'bg-slate-700 text-slate-400' : 'bg-slate-200 text-slate-600')}>
-                        {m.sender?.name?.trim()?.[0]?.toUpperCase() || '?'}
-                      </span>
+                      <UserAvatar
+                        userId={m.senderId}
+                        name={m.sender?.name ?? '?'}
+                        avatarUrlPath={m.sender?.avatarUrl ?? room?.members.find((member) => member.id === m.senderId)?.avatarUrl}
+                        style={{ width: '100%', height: '100%', borderRadius: '50%' }}
+                        imgStyle={{ objectFit: 'cover' }}
+                        initialStyle={{ display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700, background: isDark ? '#334155' : '#e2e8f0' }}
+                      />
                     </div>
                   ) : (
                     <div className="w-[34px] h-[34px] shrink-0" aria-hidden />
@@ -359,9 +365,14 @@ const ChatBubbleList = forwardRef<ChatBubbleListHandle, ChatBubbleListProps>(fun
               {!isMine && (
                 showSenderIdentity ? (
                   <div className="w-[34px] h-[34px] shrink-0" aria-hidden>
-                    <span className={cn('w-[34px] h-[34px] rounded-full flex items-center justify-center text-[13px] font-bold', isDark ? 'bg-slate-700 text-slate-400' : 'bg-slate-200 text-slate-600')}>
-                      {m.sender?.name?.trim()?.[0]?.toUpperCase() || '?'}
-                    </span>
+                    <UserAvatar
+                      userId={m.senderId}
+                      name={m.sender?.name ?? '?'}
+                      avatarUrlPath={m.sender?.avatarUrl ?? room?.members.find((member) => member.id === m.senderId)?.avatarUrl}
+                      style={{ width: '100%', height: '100%', borderRadius: '50%' }}
+                      imgStyle={{ objectFit: 'cover' }}
+                      initialStyle={{ display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700, background: isDark ? '#334155' : '#e2e8f0' }}
+                    />
                   </div>
                 ) : (
                   <div className="w-[34px] h-[34px] shrink-0" aria-hidden />

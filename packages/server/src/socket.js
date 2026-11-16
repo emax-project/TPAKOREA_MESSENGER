@@ -30,6 +30,7 @@ export function registerSocketHandlers(io) {
       const uid = String(socket.userId);
       const device = socket.device === 'mobile' ? 'mobile' : 'desktop';
       socket.join(`user:${uid}`);
+      socket.join(`session:${socket.sessionId}`);
       const wasOnline = onlineUsers.has(uid);
       onlineUsers.add(uid, device);
       const presencePayload = () => ({
@@ -52,6 +53,7 @@ export function registerSocketHandlers(io) {
               console.error(`[socket] user_online: name lookup retry failed for ${uid}`, err2);
             }
           }
+          if (!onlineUsers.has(uid)) return;
           io.emit('user_online', {
             userId: uid,
             userName,

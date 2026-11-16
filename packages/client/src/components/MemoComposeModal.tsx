@@ -7,7 +7,7 @@ import UIModal from './ui/UIModal';
 import ModalFooter from './ui/ModalFooter';
 import UIChevron from './ui/UIChevron';
 import { cn } from '../utils/cn';
-import { companyUsers, flattenDepartments } from '../utils/orgTree';
+import { companyUsers, departmentUsers, flattenDepartments } from '../utils/orgTree';
 
 type MemoComposeModalProps = {
   onClose: () => void;
@@ -304,19 +304,27 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                 <div className={cn('px-1 py-2 text-xs', isDark ? 'text-slate-400' : 'text-slate-500')}>조직도를 불러올 수 없습니다.</div>
               ) : (
                 (Array.isArray(orgTree) ? orgTree : []).map((company) => {
-                  const depts = flattenDepartments(company.departments ?? []).filter((d) =>
-                    (d.users ?? []).some((u) => String(u.id) !== String(myId)),
-                  );
-                  if (depts.length === 0) return null;
+                  const recipientIds = (users: ReturnType<typeof companyUsers>) =>
+                    [...new Set(users.filter((user) => user.id !== myId).map((user) => user.id))];
+                  const companyIds = recipientIds(companyUsers(company));
+                  if (companyIds.length === 0) return null;
+                  const depts = flattenDepartments(company.departments ?? []);
+                  const companyChecked = companyIds.every((id) => selected.has(id));
                   return (
                     <div key={company.id} className="mb-2">
-                      <div className={cn('px-1 py-1 text-[11px] font-bold', isDark ? 'text-slate-400' : 'text-slate-500')}>
+                      <label className={cn('flex items-center gap-1.5 px-1 py-1 text-[11px] font-bold', isDark ? 'text-slate-400' : 'text-slate-500')}>
+                        <input
+                          type="checkbox"
+                          checked={companyChecked}
+                          ref={(el) => {
+                            if (el) el.indeterminate = !companyChecked && companyIds.some((id) => selected.has(id));
+                          }}
+                          onChange={() => toggleDepartmentSelect(companyIds)}
+                        />
                         {company.name}
-                      </div>
+                      </label>
                       {depts.map((dept) => {
-                        const deptUserIds = (dept.users ?? [])
-                          .filter((u) => String(u.id) !== String(myId))
-                          .map((u) => u.id);
+                        const deptUserIds = recipientIds(departmentUsers(dept));
                         if (deptUserIds.length === 0) return null;
                         const deptAllChecked = deptUserIds.every((id) => selected.has(id));
                         const deptSomeChecked = deptUserIds.some((id) => selected.has(id));
@@ -327,6 +335,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                             <div className="flex items-center gap-1.5 py-1">
                               <input
                                 type="checkbox"
+                                aria-label={dept.name}
                                 checked={deptAllChecked}
                                 ref={(el) => {
                                   if (el) el.indeterminate = !deptAllChecked && deptSomeChecked;

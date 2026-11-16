@@ -578,6 +578,7 @@ function SettingsPanel({
                 <span style={{ fontSize: 13, color: isDark ? '#94a3b8' : '#64748b' }}>
                   {appVersion ? `현재 버전 v${appVersion}` : '버전 확인 중...'}
                   {updateStatus === 'downloading' && updateVersion && ` · 새 버전 v${updateVersion} 다운로드 중`}
+                  {updateStatus === 'available' && updateVersion && ` · 새 버전 v${updateVersion} 다운로드 가능`}
                   {updateStatus === 'ready' && updateVersion && ` · v${updateVersion} 설치 가능`}
                   {updateStatus === 'latest' && ' · 최신 버전입니다'}
                   {updateStatus === 'error' && updateError && ` · ${updateError}`}

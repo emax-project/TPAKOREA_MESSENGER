@@ -200,9 +200,8 @@ authRouter.get('/me', authMiddleware, async (req, res) => {
 authRouter.post('/logout', authMiddleware, async (req, res) => {
   try {
     if (req.sessionId) {
-      await prisma.userSession.delete({ where: { id: req.sessionId } }).catch((e) => {
-        console.warn('[logout] 세션 삭제 실패 (이미 만료됐을 수 있음):', e.message);
-      });
+      await prisma.userSession.deleteMany({ where: { id: req.sessionId } });
+      req.app.get('io')?.in(`session:${req.sessionId}`).disconnectSockets(true);
     }
     return res.json({ ok: true });
   } catch (err) {

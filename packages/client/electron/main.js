@@ -4,6 +4,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { pipeline } = require('node:stream/promises');
 const { Readable } = require('node:stream');
+const { createHash } = require('node:crypto');
 
 // userData 폴더를 브랜드별로 분리한다(Roaming/TPA-Korea). package.json의 "name"은 모든 브랜드 빌드에서
 // "client"로 같아서, 이름을 지정하지 않으면 같은 PC의 다른 브랜드 앱과 localStorage(서버 주소 등)가 섞인다.
@@ -145,188 +146,20 @@ ipcMain.handle('token-clear', () => {
   return true;
 });
 
-// ── 그룹웨어 자동 로그인 ──────────────────────────────────────────────
-// 홈(그룹웨어) 버튼을 OS 기본 브라우저로 열면 메신저 로그인 정보가 전달되지 않아
-// 매번 그룹웨어에 다시 로그인해야 했다. 그룹웨어는 메신저와 같은 계정(LDAP uid)을
-// 쓰므로, 메신저 로그인 때 입력한 아이디·비밀번호를 OS 암호화 API(safeStorage)로
-// 보관했다가 앱 안의 그룹웨어 창에서 로그인 폼(#loginId/#password → checkLogin())을
-// 자동으로 채워 제출한다. 그룹웨어 세션 쿠키는 전용 파티션에 유지된다.
-const GW_CRED_FILE = path.join(app.getPath('userData'), 'gw-cred.enc');
-const GW_PARTITION = 'persist:groupware';
-let groupwareWin = null;
-
-function readGroupwareCredentials() {
+// Remove credentials and cookies left by older desktop versions.
+async function clearLegacyGroupwareData() {
+  const file = path.join(app.getPath('userData'), 'gw-cred.enc');
   try {
-    if (!safeStorage.isEncryptionAvailable() || !fs.existsSync(GW_CRED_FILE)) return null;
-    const parsed = JSON.parse(safeStorage.decryptString(fs.readFileSync(GW_CRED_FILE)));
-    if (typeof parsed?.loginId !== 'string' || typeof parsed?.password !== 'string') return null;
-    if (!parsed.loginId || !parsed.password) return null;
-    return parsed;
-  } catch (err) {
-    console.error('[groupware] credential read failed', err);
-    return null;
+    fs.rmSync(file, { force: true });
+  } catch (error) {
+    console.error('[groupware] legacy credentials cleanup failed', error);
   }
-}
-
-function writeGroupwareCredentials(loginId, password) {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return false;
-    fs.writeFileSync(GW_CRED_FILE, safeStorage.encryptString(JSON.stringify({ loginId, password })));
-    return true;
-  } catch (err) {
-    console.error('[groupware] credential write failed', err);
-    return false;
+    await session.fromPartition('persist:groupware').clearStorageData();
+  } catch (error) {
+    console.error('[groupware] legacy session cleanup failed', error);
   }
 }
-
-async function clearGroupwareCredentials() {
-  try {
-    if (fs.existsSync(GW_CRED_FILE)) fs.unlinkSync(GW_CRED_FILE);
-  } catch (err) {
-    console.error('[groupware] credential clear failed', err);
-  }
-  // 메신저에서 로그아웃하면 그룹웨어 창·세션도 함께 정리한다(다른 사람이 같은 PC로 로그인하는 경우 대비).
-  BrowserWindow.getAllWindows().forEach((w) => {
-    if (!w.isDestroyed() && w.__emaxGroupware) w.destroy();
-  });
-  groupwareWin = null;
-  try {
-    await session.fromPartition(GW_PARTITION).clearStorageData();
-  } catch (err) {
-    console.error('[groupware] session clear failed', err);
-  }
-  return true;
-}
-
-function safeOrigin(url) {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return null;
-  }
-}
-
-// 그룹웨어 로그인 화면이면 저장된 계정으로 한 번만 자동 제출한다.
-// 자동 제출 뒤에도 다시 로그인 화면이 뜨면(비밀번호 불일치 등) 반복하지 않고 사용자에게 맡긴다.
-function attachGroupwareAutoLogin(win, gwOrigin) {
-  let attempted = false;
-  win.webContents.on('did-finish-load', async () => {
-    if (win.isDestroyed()) return;
-    // 저장된 계정은 설정된 그룹웨어 주소(origin)에만 입력한다 — 다른 사이트로 새지 않게.
-    if (safeOrigin(win.webContents.getURL()) !== gwOrigin) return;
-    let hasForm = false;
-    try {
-      hasForm = await win.webContents.executeJavaScript(
-        "!!(document.getElementById('loginId') && document.getElementById('password'))",
-      );
-    } catch {
-      return;
-    }
-    if (!hasForm) {
-      attempted = false; // 로그인된 화면 — 이후 세션 만료로 로그인 화면이 다시 뜨면 재시도 허용
-      return;
-    }
-    if (attempted) return;
-    const cred = readGroupwareCredentials();
-    if (!cred) return;
-    attempted = true;
-    const script = `(() => {
-      const idEl = document.getElementById('loginId');
-      const pwEl = document.getElementById('password');
-      if (!idEl || !pwEl) return false;
-      const fill = (el, v) => {
-        el.focus();
-        el.value = v;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-      fill(idEl, ${JSON.stringify(cred.loginId)});
-      fill(pwEl, ${JSON.stringify(cred.password)});
-      if (typeof window.checkLogin === 'function') { window.checkLogin(); return true; }
-      const btn = document.querySelector('.login_button, button[type="submit"], input[type="submit"]');
-      if (btn) { btn.click(); return true; }
-      return false;
-    })()`;
-    try {
-      await win.webContents.executeJavaScript(script, true);
-    } catch (err) {
-      console.error('[groupware] auto login failed', err);
-    }
-  });
-}
-
-function createGroupwareWindow(url, gwOrigin) {
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 800,
-    minHeight: 600,
-    autoHideMenuBar: true,
-    title: '그룹웨어',
-    ...(process.platform !== 'darwin' ? { icon: iconPath } : {}),
-    webPreferences: {
-      partition: GW_PARTITION,
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-    },
-  });
-  win.__emaxGroupware = true;
-
-  // 그룹웨어의 결재·인쇄 등 팝업은 같은 세션(로그인 유지)으로 앱 안에서 열고,
-  // 그 밖의 외부 주소는 OS 기본 브라우저로 넘긴다.
-  win.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (target === 'about:blank' || safeOrigin(target) === gwOrigin) {
-      return {
-        action: 'allow',
-        overrideBrowserWindowOptions: {
-          autoHideMenuBar: true,
-          ...(process.platform !== 'darwin' ? { icon: iconPath } : {}),
-          webPreferences: { partition: GW_PARTITION, nodeIntegration: false, contextIsolation: true, sandbox: true },
-        },
-      };
-    }
-    if (isAllowedExternalProtocol(target)) shell.openExternal(target);
-    return { action: 'deny' };
-  });
-  win.webContents.on('did-create-window', (child) => {
-    child.__emaxGroupware = true;
-    attachGroupwareAutoLogin(child, gwOrigin);
-  });
-
-  attachGroupwareAutoLogin(win, gwOrigin);
-  win.on('closed', () => {
-    if (groupwareWin === win) groupwareWin = null;
-  });
-  win.loadURL(url);
-  return win;
-}
-
-ipcMain.handle('gw-credentials-set', (_e, payload) => {
-  const loginId = typeof payload?.loginId === 'string' ? payload.loginId.trim() : '';
-  const password = typeof payload?.password === 'string' ? payload.password : '';
-  if (!loginId || !password) return false;
-  return writeGroupwareCredentials(loginId, password);
-});
-ipcMain.handle('gw-credentials-clear', () => clearGroupwareCredentials());
-
-ipcMain.handle('open-groupware-window', (_e, url) => {
-  if (typeof url !== 'string' || !isAllowedExternalProtocol(url)) return false;
-  const gwOrigin = safeOrigin(url);
-  if (!gwOrigin) return false;
-  if (groupwareWin && !groupwareWin.isDestroyed() && safeOrigin(groupwareWin.webContents.getURL()) === gwOrigin) {
-    // 이미 열린 창은 그대로 앞으로 — 특정 경로를 요청한 경우에만 이동
-    const { pathname, search, hash } = new URL(url);
-    if ((pathname && pathname !== '/') || search || hash) groupwareWin.loadURL(url);
-    if (groupwareWin.isMinimized()) groupwareWin.restore();
-    groupwareWin.show();
-    groupwareWin.focus();
-    return true;
-  }
-  if (groupwareWin && !groupwareWin.isDestroyed()) groupwareWin.destroy();
-  groupwareWin = createGroupwareWindow(url, gwOrigin);
-  return true;
-});
 
 const NOTIF_WIDTH = 360;
 const NOTIF_HEIGHT = 100;
@@ -630,14 +463,6 @@ function showCustomNotification(title, body, options) {
   }
 }
 
-function updateNotificationProgress(percent) {
-  if (!customNotifWin || customNotifWin.isDestroyed() || !isUpdateProgressWindow) return;
-  const pct = Math.min(100, Math.max(0, percent));
-  const round = Math.round(pct);
-  customNotifWin.webContents.executeJavaScript(
-    '(function(){ var b=document.querySelector(".progress-bar"); var t=document.querySelector(".progress-text"); if(b)b.style.width="' + pct + '%"; if(t)t.textContent="' + round + '%"; })();'
-  ).catch(() => {});
-}
 const { autoUpdater } = require('electron-updater');
 
 let updaterBaseUrl = '';
@@ -658,9 +483,10 @@ let isQuitting = false;
 let updateDownloadedPending = false;
 let pendingUpdateVersion = null;
 // 시작 시/30분 주기/설정화면 수동확인/메뉴 수동확인, 총 4곳에서 checkForUpdates()를
-// 부른다. autoDownload:true라 호출이 겹치면 같은 업데이트를 각자 또 받아버리므로,
+// 부른다. 중복된 업데이트 조회를 피하기 위해,
 // 진행 중인 검사가 있으면 새로 시작하지 않고 그 Promise를 그대로 재사용한다.
 let updateCheckPromise = null;
+let updateDownloadPromise = null;
 function safeCheckForUpdates() {
   if (updateDownloadedPending) {
     // 이미 다운로드까지 끝나 설치 대기 중 — 다시 받을 필요 없음
@@ -1355,6 +1181,24 @@ ipcMain.handle('check-for-updates', async () => {
     const v = result?.updateInfo?.version;
     const current = app.getVersion();
     const hasUpdate = Boolean(v && v !== current);
+    if (hasUpdate && !updateDownloadedPending && process.platform !== 'darwin') {
+      const options = {
+        type: 'info',
+        message: `새 버전 v${v}을 다운로드할까요?`,
+        buttons: ['다운로드', '나중에'],
+        defaultId: 1,
+        cancelId: 1,
+      };
+      const choice = mainWindow && !mainWindow.isDestroyed()
+        ? await dialog.showMessageBox(mainWindow, options)
+        : await dialog.showMessageBox(options);
+      if (choice.response === 0 && !updateDownloadedPending) {
+        updateDownloadPromise ??= autoUpdater.downloadUpdate().finally(() => {
+          updateDownloadPromise = null;
+        });
+        await updateDownloadPromise;
+      }
+    }
     const downloaded = hasUpdate && pendingUpdateVersion === v;
     if (downloaded && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-downloaded');
@@ -1384,6 +1228,7 @@ ipcMain.handle('quit-and-install', () => {
       error: 'macOS에서는 DMG를 다운로드해 Applications 폴더에 다시 설치해 주세요.',
     };
   }
+  if (!updateDownloadedPending) return { success: false, error: '다운로드가 완료된 업데이트가 없습니다.' };
   try {
     autoUpdater.quitAndInstall(false, true);
     return { success: true };
@@ -1446,7 +1291,8 @@ ipcMain.handle('fetch-user-avatar', async (_, { userId }) => {
 // 이전 버전은 앱 이름이 'client'라 %LOCALAPPDATA%\client-updater 를 썼고 설치 파일(약 166MB)이 그대로 남아 있다.
 // - 현재 폴더: 가장 최근 설치 파일 1개(차등 업데이트 기준)만 남기고 나머지·미완성 파일 삭제
 // - 옛 폴더: 더 이상 쓰이지 않으므로 pending 안의 파일 모두 삭제
-function pruneUpdaterCache() {
+async function pruneUpdaterCache() {
+  if (updateDownloadPromise || updateDownloadedPending) return;
   if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) return;
   const readFiles = (dir) => {
     try {
@@ -1467,8 +1313,32 @@ function pruneUpdaterCache() {
       }
     }
   };
-  const current = path.join(process.env.LOCALAPPDATA, 'csin-tech-updater', 'pending');
-  remove(current, policyHelpers.pickStaleUpdaterFiles(readFiles(current)));
+  const cache = path.join(process.env.LOCALAPPDATA, 'csin-tech-updater');
+  const current = path.join(cache, 'pending');
+  const pendingFiles = readFiles(current);
+  const staleFiles = policyHelpers.pickStaleUpdaterFiles(pendingFiles);
+  remove(current, staleFiles);
+  const cachedInstaller = pendingFiles.find(({ name }) => /\.exe$/i.test(name) && !staleFiles.includes(name));
+  if (cachedInstaller) {
+    const installedCopy = path.join(cache, 'installer.exe');
+    const pendingCopy = path.join(current, cachedInstaller.name);
+    const digest = async (file) => {
+      const hash = createHash('sha512');
+      for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+      return hash.digest('hex');
+    };
+    try {
+      const [installedStat, pendingStat] = await Promise.all([fs.promises.stat(installedCopy), fs.promises.stat(pendingCopy)]);
+      if (installedStat.size === pendingStat.size) {
+        const [installedHash, pendingHash] = await Promise.all([digest(installedCopy), digest(pendingCopy)]);
+        if (installedHash === pendingHash && !updateDownloadPromise && !updateDownloadedPending) {
+          remove(current, [cachedInstaller.name]);
+        }
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('[updater-cache] 중복 확인 실패:', error.message);
+    }
+  }
   const legacy = path.join(process.env.LOCALAPPDATA, 'client-updater', 'pending');
   remove(legacy, readFiles(legacy).map((f) => f.name));
 }
@@ -1490,25 +1360,23 @@ function setupAutoUpdate() {
   // 서명된 빌드는 app-update.yml의 publisherName으로 Windows 코드 서명 발행자도 검증한다 — 아래 DEPLOY 문서 참고)
   autoUpdater.allowDowngrade = false;
   autoUpdater.allowPrerelease = false;
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on('update-available', () => {
-    showCustomNotification('TPA-Korea 업데이트', '새 버전을 다운로드 중입니다. 완료 후 앱을 재시작하면 적용됩니다.', { persistent: true, progress: 0 });
-  });
-  autoUpdater.on('download-progress', (progress) => {
-    updateNotificationProgress(progress.percent);
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  let announcedVersion;
+  autoUpdater.on('update-available', ({ version }) => {
+    if (announcedVersion === version) return;
+    announcedVersion = version;
+    showCustomNotification('TPA-Korea 업데이트', `새 버전 v${version}이 있습니다. 설정에서 업데이트를 확인해 주세요.`);
   });
   autoUpdater.on('update-downloaded', (info) => {
     pendingUpdateVersion = info?.version || null;
     updateDownloadedPending = true;
     const isMac = process.platform === 'darwin';
-    // 사용 중 자동 재시작하지 않는다. Windows는 앱을 종료할 때(autoInstallOnAppQuit) 설치되고,
-    // 바로 적용하려면 설정 화면의 '지금 재시작'(quit-and-install)을 쓴다. (CSIN-Tech와 동일)
     showCustomNotification(
       'TPA-Korea 업데이트 준비됨',
       isMac
         ? '설정에서 DMG를 다운로드해 Applications에 다시 설치해 주세요.'
-        : '앱을 종료하면 새 버전이 설치됩니다. 지금 적용하려면 설정에서 재시작해 주세요.',
+        : '설정에서 설치할 시점을 선택해 주세요.',
     );
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
       mainWindow.webContents.send('update-downloaded');
@@ -1548,6 +1416,7 @@ function notifySystemLock() {
 }
 
 app.whenReady().then(() => {
+  void clearLegacyGroupwareData();
   powerMonitor.on('lock-screen', notifySystemLock);
   powerMonitor.on('suspend', notifySystemLock);
 
@@ -1592,7 +1461,7 @@ app.whenReady().then(() => {
                 .then((r) => {
                   const v = r?.updateInfo?.version;
                   const current = app.getVersion();
-                  const body = v ? (v === current ? '이미 최신 버전입니다.' : `새 버전 ${v}이(가) 있습니다. 다운로드 후 앱을 재시작하면 적용됩니다.`) : '업데이트 정보를 확인했습니다.';
+                  const body = v ? (v === current ? '이미 최신 버전입니다.' : `새 버전 ${v}이(가) 있습니다. 설정에서 업데이트를 확인해 주세요.`) : '업데이트 정보를 확인했습니다.';
                   showCustomNotification('TPA-Korea', body);
                 })
                 .catch((e) => {
@@ -1609,20 +1478,9 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(menu);
 });
 
-app.on('before-quit', (e) => {
-  if (!isQuitting) isQuitting = true;
-  // 종료 후 디스크에 대화·쪽지·조직도 캐시가 남지 않도록 정리(완료를 기다리지 않는 best-effort)
+app.on('before-quit', () => {
+  isQuitting = true;
   clearAppCache();
-  // 업데이트 대기 중이면 quitAndInstall로 설치 후 재시작 (한 번에 적용)
-  if (updateDownloadedPending && app.isPackaged && !isDev) {
-    updateDownloadedPending = false;
-    e.preventDefault();
-    setImmediate(() => {
-      app.removeAllListeners('window-all-closed');
-      BrowserWindow.getAllWindows().forEach((w) => { if (!w.isDestroyed()) w.destroy(); });
-      autoUpdater.quitAndInstall(false, true);
-    });
-  }
 });
 
 app.on('window-all-closed', () => {

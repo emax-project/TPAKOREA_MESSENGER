@@ -112,10 +112,10 @@ function handleForcedLogout(path: string, status: number, serverMessage?: string
 }
 
 export const api = {
-  async post(path: string, body: object) {
+  async post(path: string, body: object, requestHeaders = headers()) {
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: 'POST',
-      headers: headers(),
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
@@ -434,7 +434,10 @@ export const authApi = {
   register: (email: string, password: string, name: string) =>
     api.post('/auth/register', { email, password, name }) as Promise<{ user: User; token: string }>,
   me: () => api.get('/auth/me') as Promise<{ user: User }>,
-  logout: () => api.post('/auth/logout', {}) as Promise<{ ok: boolean }>,
+  logout: (token: string) => api.post('/auth/logout', {}, {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  }) as Promise<{ ok: boolean }>,
 };
 
 export type BulkRegisterUserInput = {

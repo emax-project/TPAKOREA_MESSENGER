@@ -98,7 +98,19 @@ export function useChatSocket({
       // 방 목록만 갱신 (메시지 refetch 시 소켓으로 받은 새 메시지가 덮어써져 사라지는 문제 방지)
       // 임베디드일 때는 공유 소켓의 'message' 핸들러(useMainSocket)가 이미 방 목록을 갱신하므로 생략.
       const uid = myIdRef.current;
-      if (!embedded && uid) queryClient.refetchQueries({ queryKey: ['rooms', uid] });
+      if (!embedded && uid) {
+        queryClient.setQueryData<Room[]>(['rooms', uid], (rooms) => {
+          const current = rooms?.find((item) => item.id === roomId);
+          if (!rooms || !current || current.lastMessage?.id === msg.id) return rooms;
+          if (current.lastMessage && Date.parse(current.lastMessage.createdAt) > Date.parse(msg.createdAt)) return rooms;
+          const updated: Room = {
+            ...current,
+            lastMessage: { id: msg.id, content: msg.content, createdAt: msg.createdAt, senderName: msg.sender?.name ?? '' },
+            updatedAt: msg.createdAt,
+          };
+          return [updated, ...rooms.filter((item) => item.id !== roomId)];
+        });
+      }
 
       if (msg.senderId !== myIdRef.current) {
         const now = Date.now();

@@ -393,7 +393,7 @@ roomsRouter.post('/', async (req, res) => {
       }
       const toRoomResponse = (r) => ({
         id: r.id,
-        name: r.name || r.members.map((m) => m.user.name).filter(Boolean).join(', ') || '채팅방',
+        name: r.name || r.members.filter((m) => m.userId !== req.userId).map((m) => m.user.name).filter(Boolean).join(', ') || '채팅방',
         avatarUrl: null,
         initials: r.initials || null,
         isGroup: r.isGroup,
@@ -419,7 +419,7 @@ roomsRouter.post('/', async (req, res) => {
     });
     const toRoomResponse = (r) => ({
       id: r.id,
-      name: r.name || r.members.map((m) => m.user.name).filter(Boolean).join(', ') || '채팅방',
+      name: r.name || r.members.filter((m) => m.userId !== req.userId).map((m) => m.user.name).filter(Boolean).join(', ') || '채팅방',
       avatarUrl: null,
       initials: r.initials || null,
       isGroup: r.isGroup,

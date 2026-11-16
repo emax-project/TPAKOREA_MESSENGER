@@ -11,7 +11,6 @@ import UITextInput from '../components/ui/UITextInput';
 import { APP_MAX_WIDTH } from '../layout/constants';
 import { applyWindowPinClass, isMacElectron } from '../utils/electronChrome';
 import { isNotificationPopupEnabled } from '../utils/notificationPopup';
-import { rememberGroupwareCredentials } from '../utils/groupware';
 
 const LOGIN_WINDOW_HEIGHT = 720;
 const REMEMBER_EMAIL_KEY = 'emax_remember_email';
@@ -76,7 +75,6 @@ export default function Login() {
         localStorage.removeItem(SAVED_EMAIL_KEY);
       }
     } catch { /* ignore */ }
-    rememberGroupwareCredentials(user.email || email, password);
     setAuth(user, token, { mustChangePassword: !!mustChangePassword });
     // 이전에 잠긴 채 종료됐더라도 새로 로그인했다면 잠금을 풀고 시작한다
     useScreenLockStore.getState().unlock();
@@ -224,7 +222,7 @@ export default function Login() {
             <div className="relative">
               <UITextInput
                 type="text"
-                placeholder="아이디 또는 이메일 (예: wtkim)"
+                placeholder="아이디 또는 이메일"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
