@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { authApi } from '../api';
+import { authApi, getBaseUrl } from '../api';
 import type { LoginSuccess } from '../api';
 import MfaSetupPanel from '../components/MfaSetupPanel';
 import { useScreenLockStore } from '../utils/screenLock';
@@ -45,6 +45,20 @@ export default function Login() {
   const [email, setEmail] = useState(remembered.email);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  // 지원용 정보: 접속 서버와 앱 버전(데스크톱 앱에서만). 로그인 오류 캡처만으로 어떤 설치본이 어디에 붙는지 알 수 있다.
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI?.getAppInfo?.()
+      .then((info) => { if (!cancelled && info?.version) setAppVersion(info.version); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const serverLabel = (() => {
+    const base = getBaseUrl();
+    if (!base) return typeof window !== 'undefined' ? window.location.host : '';
+    try { return new URL(base).host; } catch { return base; }
+  })();
   const [rememberEmail, setRememberEmail] = useState(remembered.remember);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -270,6 +284,9 @@ export default function Login() {
             >
               {loading ? '로그인 중...' : '로그인'}
             </button>
+            <p className="m-0 text-center text-[11px] text-[#94a3b8] select-text" data-testid="login-support-info">
+              {[appVersion ? `v${appVersion}` : null, serverLabel || null].filter(Boolean).join(' · ')}
+            </p>
           </form>
           )}
         </AuthCard>

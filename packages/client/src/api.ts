@@ -492,6 +492,7 @@ export const usersApi = {
       messageCount: number;
     }>,
   list: () => api.get('/users') as Promise<User[]>,
+  get: (id: string) => api.get(`/users/${encodeURIComponent(id)}`) as Promise<User>,
   search: (query: string) => api.get(`/users?search=${encodeURIComponent(query)}`) as Promise<User[]>,
   bulkRegister: (data: { defaultPassword?: string; users: BulkRegisterUserInput[] }) =>
     api.post('/users/bulk', data) as Promise<BulkRegisterResult>,
@@ -845,6 +846,9 @@ export const filesApi = {
     if (window.electronAPI?.downloadFile) {
       const result = await window.electronAPI.downloadFile(messageId, filename ?? undefined);
       if (result?.ok || result?.error === 'CANCELED') return;
+      if (result?.error === 'FILE_DOWNLOAD_DISABLED') {
+        throw new Error('파일 내려받기가 관리자에 의해 제한되어 있습니다');
+      }
       throw new Error('다운로드에 실패했습니다.');
     }
     // 웹(비 Electron) 폴백 — 브라우저 다운로드는 blob 경유가 불가피
@@ -986,14 +990,17 @@ export type MemoItem = {
   recipients: MemoRecipient[];
   readAt?: string | null;
   recipientId?: string | null;
+  scheduledAt?: string | null;
+  favorite?: boolean;
 };
 
 export const memosApi = {
   inbox: () => api.get('/memos/inbox') as Promise<MemoItem[]>,
   sent: () => api.get('/memos/sent') as Promise<MemoItem[]>,
   get: (id: string) => api.get(`/memos/${id}`) as Promise<MemoItem>,
-  send: (data: { recipientIds: string[]; subject: string; body: string }) =>
+  send: (data: { recipientIds: string[]; subject: string; body: string; scheduledAt?: string }) =>
     api.post('/memos', data) as Promise<MemoItem>,
+  setFavorite: (id: string, favorite: boolean) => api.put(`/memos/${id}/favorite`, { favorite }) as Promise<{ ok: boolean }>,
   markRead: (id: string) => api.post(`/memos/${id}/read`, {}) as Promise<{ ok: boolean }>,
   remove: (id: string) => api.delete(`/memos/${id}`) as Promise<{ ok: boolean }>,
   unreadCount: () => api.get('/memos/unread-count') as Promise<{ count: number }>,

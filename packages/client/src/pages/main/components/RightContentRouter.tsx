@@ -6,7 +6,7 @@ import type { UpdateStatus } from '../hooks/useUpdateManager';
 import type { ScheduleCreateOptions } from '../hooks/useMainContentActions';
 import ChatWindow from '../../ChatWindow';
 import type { MentionItem } from './MentionPanel';
-import type { MemoItem } from './MemoPanel';
+import type { MemoItem, MemoDetailActions } from './MemoPanel';
 import type { RoomSectionsProps } from './RoomSections';
 
 const NotificationPanel = lazy(() => import('./NotificationPanel'));
@@ -54,10 +54,12 @@ type RightContentRouterProps = {
     onCancelEditAnnouncement: () => void;
     onSaveAnnouncement: () => void | Promise<void>;
   };
-  memoProps: {
+  memoProps: MemoDetailActions & {
     inbox: MemoItem[];
     sent: MemoItem[];
     onOpenCompose: () => void;
+    onRefresh: () => void;
+    onFavorite: (memo: MemoItem) => void | Promise<void>;
     onMarkRead: (memo: MemoItem) => void | Promise<void>;
     onDelete: (memo: MemoItem) => void | Promise<void>;
   };
@@ -275,6 +277,11 @@ function RightContentRouter({
             sent={memoProps.sent}
             panelWrapStyle={panelWrapStyle}
             onOpenCompose={memoProps.onOpenCompose}
+            onRefresh={memoProps.onRefresh}
+            onFavorite={memoProps.onFavorite}
+            onComposeFromMemo={memoProps.onComposeFromMemo}
+            onChat={memoProps.onChat}
+            onProfile={memoProps.onProfile}
             onMarkRead={memoProps.onMarkRead}
             onDelete={memoProps.onDelete}
           />

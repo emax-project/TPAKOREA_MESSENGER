@@ -12,6 +12,7 @@ import {
 import { playNotificationSound } from '../../../utils/notificationSound';
 import { useMainSocketStore } from '../../../store';
 import { isNotificationPopupEnabled } from '../../../utils/notificationPopup';
+import { createIpcSocketProxy } from '../../../utils/ipcSocketProxy';
 
 type MessagesPage = { messages: Message[]; nextCursor: string | null; hasMore: boolean };
 
@@ -47,8 +48,9 @@ export function useChatSocket({
 
   // 메인 창 "안"(임베디드)에서 대화방을 열 때는 메인 창의 소켓 연결 1개를 그대로
   // 재사용한다 — 같은 창 안에서 소켓 연결이 중복 생성되는 걸 막기 위함(보안 점검
-  // 14번). 팝업(별도) 대화창은 별도 Electron 프로세스라 공유가 불가능해 기존처럼
-  // 자체 연결을 쓴다.
+  // 14번). 팝업(별도) 대화창은 별도 Electron 프로세스라 소켓 객체를 직접 공유할 수
+  // 없어, Electron 메인 프로세스를 거치는 중계(ipcSocketProxy)로 메인 창의 연결을
+  // 같이 쓴다. 메인 창이 준비되지 않았거나 응답이 없으면 자체 연결로 대신한다.
   const sharedSocket = useMainSocketStore((s) => s.socket);
 
   useEffect(() => {
@@ -59,262 +61,313 @@ export function useChatSocket({
       return;
     }
 
-    const ownsConnection = !embedded;
-    const s = ownsConnection ? io(getSocketUrl(), { path: '/socket.io', auth: { token } }) : sharedSocket!;
-    socketRef.current = s;
+    let cancelled = false;
+    let teardown: (() => void) | undefined;
 
-    const handleConnectError = (err: { message?: string }) => {
-      if (err?.message?.includes('invalid token')) {
-        try {
-          localStorage.setItem('forcedLogoutMessage', '다른 기기에서 로그인되어 로그아웃되었습니다.');
-          localStorage.removeItem('token');
-          if (typeof window !== 'undefined') navigateToLogin();
-        } catch {
-          // ignore
-        }
-      }
-    };
+    // s: 이 대화창이 쓸 소켓. relayed=true면 메인 창 연결을 IPC로 같이 쓰는 대리 객체다.
+    const start = (s: Socket, relayed = false): (() => void) => {
+      const ownsConnection = !embedded;
+      socketRef.current = s;
 
-    const handleError = (payload: { code?: string; message?: string }) => {
-      console.error('[Socket error]', payload);
-    };
-
-    const handleConnect = () => s.emit('join_room', roomId);
-
-    const handleMessage = (msg: Message) => {
-      if (msg.roomId !== roomId) return;
-      const withDefaults = { ...msg, readCount: msg.readCount ?? 0, reactions: msg.reactions ?? [], poll: msg.poll ?? null };
-      queryClient.setQueryData<InfiniteData<MessagesPage>>(
-        ['rooms', roomId, 'messages'],
-        (old) => {
-          if (!old?.pages?.length) return { pages: [{ messages: [withDefaults], nextCursor: null, hasMore: false }], pageParams: [undefined] };
-          const firstPage = old.pages[0];
-          if (firstPage?.messages?.some((m) => m.id === msg.id)) return old;
-          const updatedFirst = { ...firstPage, messages: [withDefaults, ...(firstPage.messages ?? [])] };
-          return { ...old, pages: [updatedFirst, ...old.pages.slice(1, 5)] };
-        }
-      );
-
-      // 방 목록만 갱신 (메시지 refetch 시 소켓으로 받은 새 메시지가 덮어써져 사라지는 문제 방지)
-      // 임베디드일 때는 공유 소켓의 'message' 핸들러(useMainSocket)가 이미 방 목록을 갱신하므로 생략.
-      const uid = myIdRef.current;
-      if (!embedded && uid) {
-        queryClient.setQueryData<Room[]>(['rooms', uid], (rooms) => {
-          const current = rooms?.find((item) => item.id === roomId);
-          if (!rooms || !current || current.lastMessage?.id === msg.id) return rooms;
-          if (current.lastMessage && Date.parse(current.lastMessage.createdAt) > Date.parse(msg.createdAt)) return rooms;
-          const updated: Room = {
-            ...current,
-            lastMessage: { id: msg.id, content: msg.content, createdAt: msg.createdAt, senderName: msg.sender?.name ?? '' },
-            updatedAt: msg.createdAt,
-          };
-          return [updated, ...rooms.filter((item) => item.id !== roomId)];
-        });
-      }
-
-      if (msg.senderId !== myIdRef.current) {
-        const now = Date.now();
-        if (now - lastMarkReadRef.current > 1000) {
-          lastMarkReadRef.current = now;
-          roomsApi.markRead(roomId).catch(() => {});
-        }
-
-        // 별도 채팅 창: 창이 백그라운드일 때 알림 표시 (Main에 소켓이 없을 수 있음)
-        if (!embedded && typeof document !== 'undefined' && document.hidden) {
+      const handleConnectError = (err: { message?: string }) => {
+        if (err?.message?.includes('invalid token')) {
           try {
-            const snoozed = Number(localStorage.getItem('notificationsSnoozedUntil') || 0);
-            const mutedRaw = localStorage.getItem('mutedRoomIds');
-            const muted = mutedRaw ? new Set(JSON.parse(mutedRaw).map(String)) : new Set();
-            if (snoozed > Date.now() || muted.has(String(msg.roomId))) return;
-
-            const senderName = msg.sender?.name ?? '알 수 없음';
-            const isTopic = roomIsTopicRef.current;
-            const roomName = roomNameRef.current;
-            // 화면 공유·주변 시선 등으로 팝업이 노출될 수 있어, 프로필 사진·대화 내용은 절대
-            // 보여주지 않는다 — 누가(발신자) 왔는지만 알리고 내용은 "메시지가 도착하였습니다."로 고정.
-            const title = isTopic && roomName ? `[${roomName} 아젠다] ${senderName}` : `[대화방] ${senderName}`;
-            const body = '메시지가 도착하였습니다.';
-            playNotificationSound();
-            const electronAPI = window.electronAPI;
-
-            if (isNotificationPopupEnabled() && electronAPI?.showNotification) {
-              electronAPI.showNotification(title, body, msg.roomId);
-            } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-              new Notification(title, { body });
-            }
+            localStorage.setItem('forcedLogoutMessage', '다른 기기에서 로그인되어 로그아웃되었습니다.');
+            localStorage.removeItem('token');
+            if (typeof window !== 'undefined') navigateToLogin();
           } catch {
             // ignore
           }
         }
-      }
-    };
+      };
 
-    const handleMessageUpdated = (payload: { id: string; roomId: string; content: string; editedAt: string }) => {
-      if (payload.roomId !== roomId) return;
-      queryClient.setQueryData<InfiniteData<MessagesPage>>(
-        ['rooms', roomId, 'messages'],
-        (old) => {
-          if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
-          return { ...old, pages: old.pages.map((page) => ({ ...page, messages: (page.messages ?? []).map((m) => m.id === payload.id ? { ...m, content: payload.content, editedAt: payload.editedAt } : m) })) };
-        }
-      );
-    };
+      const handleError = (payload: { code?: string; message?: string }) => {
+        console.error('[Socket error]', payload);
+      };
 
-    const handleMessageDeleted = (payload: { id: string; roomId: string }) => {
-      if (payload.roomId !== roomId) return;
-      queryClient.setQueryData<InfiniteData<MessagesPage>>(
-        ['rooms', roomId, 'messages'],
-        (old) => {
-          if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
-          return { ...old, pages: old.pages.map((page) => ({ ...page, messages: (page.messages ?? []).map((m) => m.id === payload.id ? { ...m, content: '[삭제된 메시지]', deletedAt: new Date().toISOString() } : m) })) };
-        }
-      );
-    };
+      const handleConnect = () => s.emit('join_room', roomId);
 
-    const handleReactionUpdated = (payload: { messageId: string; reactions: ReactionGroup[] }) => {
-      queryClient.setQueryData<InfiniteData<MessagesPage>>(
-        ['rooms', roomId, 'messages'],
-        (old) => {
-          if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
-          return { ...old, pages: old.pages.map((page) => ({ ...page, messages: (page.messages ?? []).map((m) => m.id === payload.messageId ? { ...m, reactions: payload.reactions } : m) })) };
-        }
-      );
-    };
-
-    const handlePollVoted = (payload: { messageId?: string; id: string; question: string; isMultiple: boolean; options: Array<{ id: string; text: string; voteCount: number; voterIds: string[] }> }) => {
-      queryClient.setQueryData<InfiniteData<MessagesPage>>(
-        ['rooms', roomId, 'messages'],
-        (old) => {
-          if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
-          return {
-            ...old,
-            pages: old.pages.map((page) => ({
-              ...page,
-              messages: (page.messages ?? []).map((m) => {
-                if (m.poll && m.poll.id === payload.id) {
-                  return { ...m, poll: { ...m.poll, options: payload.options } };
-                }
-                return m;
-              }),
-            })),
-          };
-        }
-      );
-    };
-
-    const handleMessagePinned = () => {
-      queryClient.invalidateQueries({ queryKey: ['rooms', roomId, 'pins'] });
-    };
-    const handleMessageUnpinned = () => {
-      queryClient.invalidateQueries({ queryKey: ['rooms', roomId, 'pins'] });
-    };
-    const handleMembersAdded = (payload: { roomId: string }) => {
-      if (payload.roomId === roomId) {
-        queryClient.refetchQueries({ queryKey: ['rooms', roomId] });
-        queryClient.refetchQueries({ queryKey: ['rooms'] });
-      }
-    };
-    const handleMemberLeft = () => {
-      queryClient.refetchQueries({ queryKey: ['rooms', roomId] });
-      queryClient.refetchQueries({ queryKey: ['rooms', roomId, 'messages'] });
-    };
-
-    const handleProjectEvent = () => {
-      queryClient.invalidateQueries({ queryKey: ['projects', roomId] });
-    };
-
-    const handleRoomRead = (payload: { roomId: string; userId: string }) => {
-      if (payload.roomId !== roomId || payload.userId === myIdRef.current) return;
-      queryClient.setQueryData<InfiniteData<MessagesPage>>(
-        ['rooms', roomId, 'messages'],
-        (old) => {
-          if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
-          return {
-            ...old,
-            pages: old.pages.map((page) => ({
-              ...page,
-              messages: (page.messages ?? []).map((m) =>
-                m.senderId === myIdRef.current ? { ...m, readCount: Math.max(m.readCount ?? 0, 1) } : m
-              ),
-            })),
-          };
-        }
-      );
-      queryClient.refetchQueries({ queryKey: ['rooms', roomId, 'messages'] });
-    };
-
-    const handleMention = (payload: { roomId: string; senderName: string; content: string }) => {
-      playNotificationSound();
-      if (isNotificationPopupEnabled()) {
-        // 멘션 내용도 화면 공유 등으로 유출될 수 있어 보여주지 않는다.
-        window.electronAPI?.showNotification(
-          `${payload.senderName}님이 회원님을 멘션했습니다`,
-          '메시지가 도착하였습니다.'
+      const handleMessage = (msg: Message) => {
+        if (msg.roomId !== roomId) return;
+        const withDefaults = { ...msg, readCount: msg.readCount ?? 0, reactions: msg.reactions ?? [], poll: msg.poll ?? null };
+        queryClient.setQueryData<InfiniteData<MessagesPage>>(
+          ['rooms', roomId, 'messages'],
+          (old) => {
+            if (!old?.pages?.length) return { pages: [{ messages: [withDefaults], nextCursor: null, hasMore: false }], pageParams: [undefined] };
+            const firstPage = old.pages[0];
+            if (firstPage?.messages?.some((m) => m.id === msg.id)) return old;
+            const updatedFirst = { ...firstPage, messages: [withDefaults, ...(firstPage.messages ?? [])] };
+            return { ...old, pages: [updatedFirst, ...old.pages.slice(1, 5)] };
+          }
         );
+
+        // 방 목록만 갱신 (메시지 refetch 시 소켓으로 받은 새 메시지가 덮어써져 사라지는 문제 방지)
+        // 임베디드일 때는 공유 소켓의 'message' 핸들러(useMainSocket)가 이미 방 목록을 갱신하므로 생략.
+        const uid = myIdRef.current;
+        if (!embedded && uid) {
+          queryClient.setQueryData<Room[]>(['rooms', uid], (rooms) => {
+            const current = rooms?.find((item) => item.id === roomId);
+            if (!rooms || !current || current.lastMessage?.id === msg.id) return rooms;
+            if (current.lastMessage && Date.parse(current.lastMessage.createdAt) > Date.parse(msg.createdAt)) return rooms;
+            const updated: Room = {
+              ...current,
+              lastMessage: { id: msg.id, content: msg.content, createdAt: msg.createdAt, senderName: msg.sender?.name ?? '' },
+              updatedAt: msg.createdAt,
+            };
+            return [updated, ...rooms.filter((item) => item.id !== roomId)];
+          });
+        }
+
+        if (msg.senderId !== myIdRef.current) {
+          const now = Date.now();
+          if (now - lastMarkReadRef.current > 1000) {
+            lastMarkReadRef.current = now;
+            roomsApi.markRead(roomId).catch(() => {});
+          }
+
+          // 별도 채팅 창: 창이 백그라운드일 때 알림 표시 (Main에 소켓이 없을 수 있음)
+          if (!embedded && typeof document !== 'undefined' && document.hidden) {
+            try {
+              const snoozed = Number(localStorage.getItem('notificationsSnoozedUntil') || 0);
+              const mutedRaw = localStorage.getItem('mutedRoomIds');
+              const muted = mutedRaw ? new Set(JSON.parse(mutedRaw).map(String)) : new Set();
+              if (snoozed > Date.now() || muted.has(String(msg.roomId))) return;
+
+              const senderName = msg.sender?.name ?? '알 수 없음';
+              const isTopic = roomIsTopicRef.current;
+              const roomName = roomNameRef.current;
+              // 화면 공유·주변 시선 등으로 팝업이 노출될 수 있어, 프로필 사진·대화 내용은 절대
+              // 보여주지 않는다 — 누가(발신자) 왔는지만 알리고 내용은 "메시지가 도착하였습니다."로 고정.
+              const title = isTopic && roomName ? `[${roomName} 아젠다] ${senderName}` : `[대화방] ${senderName}`;
+              const body = '메시지가 도착하였습니다.';
+              playNotificationSound();
+              const electronAPI = window.electronAPI;
+
+              if (isNotificationPopupEnabled() && electronAPI?.showNotification) {
+                electronAPI.showNotification(title, body, msg.roomId);
+              } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                new Notification(title, { body });
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      };
+
+      const handleMessageUpdated = (payload: { id: string; roomId: string; content: string; editedAt: string }) => {
+        if (payload.roomId !== roomId) return;
+        queryClient.setQueryData<InfiniteData<MessagesPage>>(
+          ['rooms', roomId, 'messages'],
+          (old) => {
+            if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
+            return { ...old, pages: old.pages.map((page) => ({ ...page, messages: (page.messages ?? []).map((m) => m.id === payload.id ? { ...m, content: payload.content, editedAt: payload.editedAt } : m) })) };
+          }
+        );
+      };
+
+      const handleMessageDeleted = (payload: { id: string; roomId: string }) => {
+        if (payload.roomId !== roomId) return;
+        queryClient.setQueryData<InfiniteData<MessagesPage>>(
+          ['rooms', roomId, 'messages'],
+          (old) => {
+            if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
+            return { ...old, pages: old.pages.map((page) => ({ ...page, messages: (page.messages ?? []).map((m) => m.id === payload.id ? { ...m, content: '[삭제된 메시지]', deletedAt: new Date().toISOString() } : m) })) };
+          }
+        );
+      };
+
+      const handleReactionUpdated = (payload: { messageId: string; reactions: ReactionGroup[] }) => {
+        queryClient.setQueryData<InfiniteData<MessagesPage>>(
+          ['rooms', roomId, 'messages'],
+          (old) => {
+            if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
+            return { ...old, pages: old.pages.map((page) => ({ ...page, messages: (page.messages ?? []).map((m) => m.id === payload.messageId ? { ...m, reactions: payload.reactions } : m) })) };
+          }
+        );
+      };
+
+      const handlePollVoted = (payload: { messageId?: string; id: string; question: string; isMultiple: boolean; options: Array<{ id: string; text: string; voteCount: number; voterIds: string[] }> }) => {
+        queryClient.setQueryData<InfiniteData<MessagesPage>>(
+          ['rooms', roomId, 'messages'],
+          (old) => {
+            if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
+            return {
+              ...old,
+              pages: old.pages.map((page) => ({
+                ...page,
+                messages: (page.messages ?? []).map((m) => {
+                  if (m.poll && m.poll.id === payload.id) {
+                    return { ...m, poll: { ...m.poll, options: payload.options } };
+                  }
+                  return m;
+                }),
+              })),
+            };
+          }
+        );
+      };
+
+      const handleMessagePinned = () => {
+        queryClient.invalidateQueries({ queryKey: ['rooms', roomId, 'pins'] });
+      };
+      const handleMessageUnpinned = () => {
+        queryClient.invalidateQueries({ queryKey: ['rooms', roomId, 'pins'] });
+      };
+      const handleMembersAdded = (payload: { roomId: string }) => {
+        if (payload.roomId === roomId) {
+          queryClient.refetchQueries({ queryKey: ['rooms', roomId] });
+          queryClient.refetchQueries({ queryKey: ['rooms'] });
+        }
+      };
+      const handleMemberLeft = () => {
+        queryClient.refetchQueries({ queryKey: ['rooms', roomId] });
+        queryClient.refetchQueries({ queryKey: ['rooms', roomId, 'messages'] });
+      };
+
+      const handleProjectEvent = () => {
+        queryClient.invalidateQueries({ queryKey: ['projects', roomId] });
+      };
+
+      const handleRoomRead = (payload: { roomId: string; userId: string }) => {
+        if (payload.roomId !== roomId || payload.userId === myIdRef.current) return;
+        queryClient.setQueryData<InfiniteData<MessagesPage>>(
+          ['rooms', roomId, 'messages'],
+          (old) => {
+            if (!old?.pages?.length) return old ?? { pages: [], pageParams: [] };
+            return {
+              ...old,
+              pages: old.pages.map((page) => ({
+                ...page,
+                messages: (page.messages ?? []).map((m) =>
+                  m.senderId === myIdRef.current ? { ...m, readCount: Math.max(m.readCount ?? 0, 1) } : m
+                ),
+              })),
+            };
+          }
+        );
+        queryClient.refetchQueries({ queryKey: ['rooms', roomId, 'messages'] });
+      };
+
+      const handleMention = (payload: { roomId: string; senderName: string; content: string }) => {
+        playNotificationSound();
+        if (isNotificationPopupEnabled()) {
+          // 멘션 내용도 화면 공유 등으로 유출될 수 있어 보여주지 않는다.
+          window.electronAPI?.showNotification(
+            `${payload.senderName}님이 회원님을 멘션했습니다`,
+            '메시지가 도착하였습니다.'
+          );
+        }
+      };
+
+      // 팝업 대화창은 자체 연결이라, 끊겼다 복구된 뒤 놓친 메시지를 직접 다시
+      // 불러와야 한다(메인 창 공유 소켓은 useMainSocket에서 따로 처리).
+      const handleReconnect = () => {
+        queryClient.invalidateQueries({ queryKey: ['rooms'] });
+      };
+
+      if (ownsConnection) {
+        s.on('connect_error', handleConnectError);
+        s.on('error', handleError);
+        s.on('connect', handleConnect);
+        s.io.on('reconnect', handleReconnect);
+      } else if (s.connected) {
+        s.emit('join_room', roomId);
+      } else {
+        s.once('connect', handleConnect);
       }
+      s.on('message', handleMessage);
+      s.on('message_updated', handleMessageUpdated);
+      s.on('message_deleted', handleMessageDeleted);
+      s.on('reaction_updated', handleReactionUpdated);
+      s.on('poll_voted', handlePollVoted);
+      s.on('message_pinned', handleMessagePinned);
+      s.on('message_unpinned', handleMessageUnpinned);
+      s.on('members_added', handleMembersAdded);
+      s.on('member_left', handleMemberLeft);
+      s.on('project_updated', handleProjectEvent);
+      s.on('task_created', handleProjectEvent);
+      s.on('task_updated', handleProjectEvent);
+      s.on('task_moved', handleProjectEvent);
+      s.on('task_deleted', handleProjectEvent);
+      s.on('room_read', handleRoomRead);
+      s.on('mention', handleMention);
+
+      // 중계 연결은 이미 연결된 상태로 시작할 수 있어, 이때는 connect 이벤트를 기다리지 않고 바로 방에 들어간다
+      if (relayed && s.connected) s.emit('join_room', roomId);
+
+      setSocket(s);
+
+      return () => {
+        if (ownsConnection) {
+          s.removeAllListeners();
+          s.io.off('reconnect', handleReconnect);
+          s.disconnect();
+        } else {
+          s.off('connect', handleConnect);
+          s.off('message', handleMessage);
+          s.off('message_updated', handleMessageUpdated);
+          s.off('message_deleted', handleMessageDeleted);
+          s.off('reaction_updated', handleReactionUpdated);
+          s.off('poll_voted', handlePollVoted);
+          s.off('message_pinned', handleMessagePinned);
+          s.off('message_unpinned', handleMessageUnpinned);
+          s.off('members_added', handleMembersAdded);
+          s.off('member_left', handleMemberLeft);
+          s.off('project_updated', handleProjectEvent);
+          s.off('task_created', handleProjectEvent);
+          s.off('task_updated', handleProjectEvent);
+          s.off('task_moved', handleProjectEvent);
+          s.off('task_deleted', handleProjectEvent);
+          s.off('room_read', handleRoomRead);
+          s.off('mention', handleMention);
+        }
+        socketRef.current = null;
+        setSocket(null);
+      };
     };
 
-    // 팝업 대화창은 자체 연결이라, 끊겼다 복구된 뒤 놓친 메시지를 직접 다시
-    // 불러와야 한다(메인 창 공유 소켓은 useMainSocket에서 따로 처리).
-    const handleReconnect = () => {
-      queryClient.invalidateQueries({ queryKey: ['rooms'] });
-    };
+    const startOwn = () => start(io(getSocketUrl(), { path: '/socket.io', auth: { token } }));
 
-    if (ownsConnection) {
-      s.on('connect_error', handleConnectError);
-      s.on('error', handleError);
-      s.on('connect', handleConnect);
-      s.io.on('reconnect', handleReconnect);
-    } else if (s.connected) {
-      s.emit('join_room', roomId);
+    if (embedded) {
+      teardown = start(sharedSocket!);
     } else {
-      s.once('connect', handleConnect);
+      const relayApi = window.electronAPI?.socketRelay;
+      if (relayApi) {
+        // 팝업 대화창: 메인 창이 서버 연결을 유지하고 있으면 그 연결을 같이 쓴다.
+        // 메인 창이 준비되지 않았거나 응답이 없으면 기존처럼 자체 연결로 대신한다.
+        relayApi
+          .available()
+          .then(async (ok) => {
+            if (cancelled) return;
+            if (!ok) {
+              teardown = startOwn();
+              return;
+            }
+            const proxy = createIpcSocketProxy(relayApi);
+            const ready = await proxy.ready;
+            if (cancelled) {
+              proxy.dispose();
+              return;
+            }
+            if (!ready) {
+              proxy.dispose();
+              teardown = startOwn();
+              return;
+            }
+            teardown = start(proxy.socket, true);
+          })
+          .catch(() => {
+            if (!cancelled) teardown = startOwn();
+          });
+      } else {
+        teardown = startOwn();
+      }
     }
-    s.on('message', handleMessage);
-    s.on('message_updated', handleMessageUpdated);
-    s.on('message_deleted', handleMessageDeleted);
-    s.on('reaction_updated', handleReactionUpdated);
-    s.on('poll_voted', handlePollVoted);
-    s.on('message_pinned', handleMessagePinned);
-    s.on('message_unpinned', handleMessageUnpinned);
-    s.on('members_added', handleMembersAdded);
-    s.on('member_left', handleMemberLeft);
-    s.on('project_updated', handleProjectEvent);
-    s.on('task_created', handleProjectEvent);
-    s.on('task_updated', handleProjectEvent);
-    s.on('task_moved', handleProjectEvent);
-    s.on('task_deleted', handleProjectEvent);
-    s.on('room_read', handleRoomRead);
-    s.on('mention', handleMention);
-
-    setSocket(s);
 
     return () => {
-      if (ownsConnection) {
-        s.removeAllListeners();
-        s.io.off('reconnect', handleReconnect);
-        s.disconnect();
-      } else {
-        s.off('connect', handleConnect);
-        s.off('message', handleMessage);
-        s.off('message_updated', handleMessageUpdated);
-        s.off('message_deleted', handleMessageDeleted);
-        s.off('reaction_updated', handleReactionUpdated);
-        s.off('poll_voted', handlePollVoted);
-        s.off('message_pinned', handleMessagePinned);
-        s.off('message_unpinned', handleMessageUnpinned);
-        s.off('members_added', handleMembersAdded);
-        s.off('member_left', handleMemberLeft);
-        s.off('project_updated', handleProjectEvent);
-        s.off('task_created', handleProjectEvent);
-        s.off('task_updated', handleProjectEvent);
-        s.off('task_moved', handleProjectEvent);
-        s.off('task_deleted', handleProjectEvent);
-        s.off('room_read', handleRoomRead);
-        s.off('mention', handleMention);
-      }
-      socketRef.current = null;
-      setSocket(null);
+      cancelled = true;
+      teardown?.();
     };
   }, [token, roomId, embedded, queryClient, setSocket, socketRef, sharedSocket]);
 }

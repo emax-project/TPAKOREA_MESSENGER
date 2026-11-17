@@ -437,11 +437,15 @@ model Memo {
   subject    String
   body       String
   createdAt  DateTime        @default(now())
+  scheduledAt DateTime?
+  senderFavorite Boolean @default(false)
+  senderDeletedAt DateTime?
   sender     User            @relation("SentMemos", fields: [senderId], references: [id], onDelete: Cascade)
   recipients MemoRecipient[]
 
   @@index([senderId])
   @@index([createdAt])
+  @@index([scheduledAt])
 }
 
 model MemoRecipient {
@@ -450,6 +454,7 @@ model MemoRecipient {
   userId    String
   readAt    DateTime?
   deletedAt DateTime?
+  favorite  Boolean @default(false)
   memo      Memo      @relation(fields: [memoId], references: [id], onDelete: Cascade)
   user      User      @relation("ReceivedMemos", fields: [userId], references: [id], onDelete: Cascade)
 

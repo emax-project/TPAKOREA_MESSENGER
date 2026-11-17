@@ -18,6 +18,7 @@ import { useUpdateManager } from './main/hooks/useUpdateManager';
 import { useNotificationPrefs } from './main/hooks/useNotificationPrefs';
 import { playNotificationSound } from '../utils/notificationSound';
 import { useMainSocket } from './main/hooks/useMainSocket';
+import { useSocketRelayHost } from './main/hooks/useSocketRelayHost';
 import { useMainContentActions } from './main/hooks/useMainContentActions';
 import LeftSidebar from './main/components/LeftSidebar';
 import RoomListItem from './main/components/RoomListItem';
@@ -225,7 +226,7 @@ export default function Main() {
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [onlinePresence, setOnlinePresence] = useState<OnlinePresenceMap>({});
   const [showMemoCompose, setShowMemoCompose] = useState(false);
-  const [memoComposeRecipients, setMemoComposeRecipients] = useState<string[]>([]);
+  const [memoCompose, setMemoCompose] = useState<{ ids: string[]; recipients?: OrgUser[]; body?: string }>({ ids: [] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; user: OrgUser; orgGroupId?: string; selectedUsers?: OrgUser[] } | null>(null);
   const [addToGroupUsers, setAddToGroupUsers] = useState<OrgUser[] | null>(null);
   const [profileModalUser, setProfileModalUser] = useState<OrgUser | null>(null);
@@ -287,6 +288,7 @@ export default function Main() {
   // --- Queries ---
   const { data: allRooms = [], isError: roomsError } = useQuery<Room[]>({ queryKey: ['rooms', myId], queryFn: roomsApi.list, enabled: !!myId });
   const { data: folders = [] } = useQuery<Folder[]>({ queryKey: ['folders'], queryFn: foldersApi.list, enabled: !!myId });
+  useSocketRelayHost();
   useMainSocket({
     token,
     queryClient,
@@ -508,7 +510,7 @@ export default function Main() {
   const { data: mentions = [] } = useQuery({ queryKey: ['mentions'], queryFn: mentionsApi.list, enabled: !!token && activePanel === 'notifications' });
   const { data: unreadMentionCount } = useQuery({ queryKey: ['mentions', 'unread-count'], queryFn: mentionsApi.unreadCount, enabled: !!token, refetchInterval: 30000 });
   const { data: memoInbox = [] } = useQuery({ queryKey: ['memos', 'inbox'], queryFn: memosApi.inbox, enabled: !!token && activePanel === 'memo' });
-  const { data: memoSent = [] } = useQuery({ queryKey: ['memos', 'sent'], queryFn: memosApi.sent, enabled: !!token && activePanel === 'memo' });
+  const { data: memoSent = [] } = useQuery({ queryKey: ['memos', 'sent'], queryFn: memosApi.sent, enabled: !!token && activePanel === 'memo', refetchInterval: 15000 });
   const { data: unreadMemoCount } = useQuery({ queryKey: ['memos', 'unread-count'], queryFn: memosApi.unreadCount, enabled: !!token, refetchInterval: 30000 });
   const { data: publicRooms = [] } = useQuery({ queryKey: ['rooms', 'public'], queryFn: roomsApi.listPublic, enabled: !!token && activePanel === 'rooms' && sectionOpen.topic });
 
@@ -756,6 +758,7 @@ export default function Main() {
   }, []);
   const handleToggleFavorite = async (room: Room) => { try { await roomsApi.toggleFavorite(room.id, !room.isFavorite); queryClient.invalidateQueries({ queryKey: ['rooms'] }); } catch (err) { console.error(err); } setRoomContextMenu(null); };
   const handleToggleMuteRoom = (roomId: string) => { toggleMuteRoom(roomId); setRoomContextMenu(null); };
+  const handleOpenRoomInNewWindow = (roomId: string) => { openChatWindow(roomId); setRoomContextMenu(null); };
   const handleLeaveRoom = async (roomId: string) => { if (!confirm('채팅방을 나가시겠습니까?')) { setRoomContextMenu(null); return; } try { await roomsApi.leave(roomId); queryClient.invalidateQueries({ queryKey: ['rooms'] }); } catch (err) { console.error(err); } setRoomContextMenu(null); };
   const handleSwitchAffiliation = async (departmentId: string) => {
     try {
@@ -957,7 +960,7 @@ export default function Main() {
     }
   }, [navigate, queryClient]);
   const handleOpenMemoCompose = useCallback((recipientIds: string[] = []) => {
-    setMemoComposeRecipients(recipientIds);
+    setMemoCompose({ ids: recipientIds });
     setShowMemoCompose(true);
   }, []);
   const handleMemoSent = useCallback(() => {
@@ -1252,6 +1255,27 @@ export default function Main() {
                 inbox: Array.isArray(memoInbox) ? memoInbox : [],
                 sent: Array.isArray(memoSent) ? memoSent : [],
                 onOpenCompose: () => handleOpenMemoCompose(),
+                onComposeFromMemo: (recipients, body) => {
+                  setMemoCompose({ ids: [], recipients, body });
+                  setShowMemoCompose(true);
+                },
+                onChat: handleOpenDirectMessage,
+                onProfile: async (sender) => {
+                  try {
+                    setProfileModalUser(await usersApi.get(sender.id));
+                  } catch {
+                    showToast('보낸 사람의 프로필을 불러오지 못했습니다.', 'error');
+                  }
+                },
+                onRefresh: handleMemoSent,
+                onFavorite: async (memo) => {
+                  try {
+                    await memosApi.setFavorite(memo.id, !memo.favorite);
+                    handleMemoSent();
+                  } catch {
+                    showToast('관심 쪽지를 변경하지 못했습니다.', 'error');
+                  }
+                },
                 onMarkRead: handleMarkMemoRead,
                 onDelete: handleDeleteMemo,
               }}
@@ -1430,12 +1454,13 @@ export default function Main() {
         mutedRoomIds={mutedRoomIds}
         onToggleFavorite={handleToggleFavorite}
         onToggleMuteRoom={handleToggleMuteRoom}
+        onOpenRoomInNewWindow={handleOpenRoomInNewWindow}
         onLeaveRoom={handleLeaveRoom}
         profileModalUser={profileModalUser}
         onlineUserIds={onlineUserIds}
         onSendMemoToUser={handleSendMemoToUser}
         onSendMemoToUsers={(ids) => {
-          setMemoComposeRecipients(ids);
+          setMemoCompose({ ids });
           setShowMemoCompose(true);
           setContextMenu(null);
         }}
@@ -1446,7 +1471,9 @@ export default function Main() {
 
       {showMemoCompose && (
         <MemoComposeModal
-          initialRecipientIds={memoComposeRecipients}
+          initialRecipientIds={memoCompose.ids}
+          initialRecipients={memoCompose.recipients}
+          initialBody={memoCompose.body}
           onClose={() => setShowMemoCompose(false)}
           onSent={handleMemoSent}
         />

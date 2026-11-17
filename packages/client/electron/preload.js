@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('navigate-to-room', listener);
   },
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  printMemo: () => ipcRenderer.send('print-memo'),
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   setTitleBarTheme: (isDark) => ipcRenderer.invoke('set-title-bar-theme', { isDark }),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
@@ -88,4 +89,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearDownloadPath: () => ipcRenderer.invoke('clear-download-path'),
   setAskSaveAs: (flag) => ipcRenderer.invoke('set-ask-save-as', flag),
   downloadFile: (messageId, filename) => ipcRenderer.invoke('download-file-stream', { messageId, filename }),
+  // 팝업 대화창이 메인 창의 서버 연결 하나를 같이 쓰도록 중계한다(socketRelay: 팝업 쪽, socketRelayHost: 메인 창 쪽).
+  socketRelay: {
+    available: () => ipcRenderer.invoke('socket-relay:available'),
+    request: (msg) => ipcRenderer.send('socket-relay:request', msg),
+    onResponse: (cb) => {
+      const handler = (_e, msg) => cb(msg);
+      ipcRenderer.on('socket-relay:response', handler);
+      return () => ipcRenderer.removeListener('socket-relay:response', handler);
+    },
+    onEvent: (cb) => {
+      const handler = (_e, msg) => cb(msg);
+      ipcRenderer.on('socket-relay:event', handler);
+      return () => ipcRenderer.removeListener('socket-relay:event', handler);
+    },
+  },
+  socketRelayHost: {
+    register: () => ipcRenderer.send('socket-relay:host-register'),
+    unregister: () => ipcRenderer.send('socket-relay:host-unregister'),
+    onRequest: (cb) => {
+      const handler = (_e, msg) => cb(msg);
+      ipcRenderer.on('socket-relay:request', handler);
+      return () => ipcRenderer.removeListener('socket-relay:request', handler);
+    },
+    respond: (msg) => ipcRenderer.send('socket-relay:response', msg),
+    sendEvent: (msg) => ipcRenderer.send('socket-relay:event', msg),
+  },
 });

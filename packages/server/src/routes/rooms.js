@@ -592,11 +592,14 @@ roomsRouter.post('/:id/members', async (req, res) => {
     }
 
     const allMemberIds = [...existingIds, ...newUsers.map((u) => u.id)];
-    const allMemberNames = [
-      ...existingMembers.map((m) => m.user?.name ?? ''),
-      ...newUsers.map((u) => u.name ?? ''),
+    // 이름은 DB에 저장하지 않는다(null). 저장하면 모든 참여자에게 같은 이름(본인 포함)이 보이므로,
+    // 방 목록·상세에서 "보는 사람 본인을 뺀 참여자 이름"으로 만들어 보여 준다.
+    // 아래 응답의 name도 요청자 기준으로 같은 방식으로 만든다.
+    const otherMemberNames = [
+      ...existingMembers.filter((m) => m.userId !== req.userId).map((m) => m.user?.name ?? ''),
+      ...newUsers.filter((u) => u.id !== req.userId).map((u) => u.name ?? ''),
     ].filter(Boolean);
-    const groupName = allMemberNames.length > 0 ? allMemberNames.join(', ') : '그룹 채팅';
+    const groupName = otherMemberNames.length > 0 ? otherMemberNames.join(', ') : '그룹 채팅';
     const invitedNames = newUsers.map((u) => u.name).join(', ');
 
     const newRoom = await prisma.$transaction(async (tx) => {
@@ -604,7 +607,7 @@ roomsRouter.post('/:id/members', async (req, res) => {
         data: {
           isGroup: true,
           isTopic: false,
-          name: groupName,
+          name: null,
           isPublic: !!isPublic,
           members: {
             create: allMemberIds.map((uid) => ({ userId: uid })),

@@ -664,7 +664,10 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
             onClose={() => setInviteOpen(false)}
             onInvited={(newRoomId: string) => {
               queryClient.refetchQueries({ queryKey: ['rooms'] });
-              if (window.electronAPI?.openChatWindow) {
+              if (embedded) {
+                // 메인 창 안에서 보던 대화는 새 방도 메인 창 안에서 연다
+                navigate(`/room/${newRoomId}`);
+              } else if (window.electronAPI?.openChatWindow) {
                 window.electronAPI.openChatWindow(newRoomId);
               } else {
                 window.open(`${window.location.origin}/chat/${newRoomId}`, '_blank', 'width=480,height=680');

@@ -53,6 +53,7 @@ type MainOverlaysProps = {
   mutedRoomIds: Set<string>;
   onToggleFavorite: (room: Room) => void | Promise<void>;
   onToggleMuteRoom: (roomId: string) => void;
+  onOpenRoomInNewWindow: (roomId: string) => void;
   onLeaveRoom: (roomId: string) => void | Promise<void>;
   profileModalUser: OrgUser | null;
   onlineUserIds: Set<string>;
@@ -103,6 +104,7 @@ export default function MainOverlays({
   mutedRoomIds,
   onToggleFavorite,
   onToggleMuteRoom,
+  onOpenRoomInNewWindow,
   onLeaveRoom,
   profileModalUser,
   onlineUserIds,
@@ -365,11 +367,12 @@ export default function MainOverlays({
       })()}
 
       {roomContextMenu && (() => {
-        const estH = 180;
+        const estH = 216;
         const top = roomContextMenu.y + estH > window.innerHeight - 8 ? roomContextMenu.y - estH : roomContextMenu.y;
         const left = Math.min(Math.max(roomContextMenu.x, 8), window.innerWidth - 210);
         return (
           <div className={ctxMenuCls} style={{ left, top }} onClick={(e) => e.stopPropagation()}>
+            <button type="button" className={ctxMenuItemCls} onClick={() => onOpenRoomInNewWindow(roomContextMenu.room.id)}>새 창으로 열기</button>
             <button type="button" className={ctxMenuItemCls} onClick={() => void onToggleFavorite(roomContextMenu.room)}>{roomContextMenu.room.isFavorite ? '즐겨찾기 해제' : '즐겨찾기'}</button>
             <button type="button" className={ctxMenuItemCls} onClick={() => onToggleMuteRoom(roomContextMenu.room.id)}>{mutedRoomIds.has(roomContextMenu.room.id) ? '알림 켜기' : '알림 끄기'}</button>
             {roomContextMenu.room.isGroup && roomContextMenu.room.isTopic && (

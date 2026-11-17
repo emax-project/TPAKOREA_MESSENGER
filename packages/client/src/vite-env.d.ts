@@ -42,6 +42,7 @@ interface Window {
     setMaxChatWindows?: (n: number) => void;
     onNavigateToRoom: (handler: (roomId: string) => void) => () => void;
     getAppVersion: () => Promise<string>;
+    printMemo?: () => void;
     getAppInfo: () => Promise<{ version: string; isPackaged: boolean; platform: string }>;
     setTitleBarTheme?: (isDark: boolean) => Promise<void>;
     checkForUpdates: () => Promise<{
@@ -65,5 +66,13 @@ interface Window {
     clearDownloadPath?: () => Promise<{ path: string | null; askSaveAs?: boolean }>;
     setAskSaveAs?: (flag: boolean) => Promise<{ path: string | null; askSaveAs?: boolean }>;
     downloadFile?: (messageId: string, filename?: string | null) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    socketRelay?: import('./utils/ipcSocketProxy').SocketRelayApi;
+    socketRelayHost?: {
+      register: () => void;
+      unregister: () => void;
+      onRequest: (cb: (msg: import('./utils/ipcSocketProxy').RelayRequest & { from: number }) => void) => () => void;
+      respond: (msg: { to: number; reqId: number; connected?: boolean; error?: string; args?: unknown[] }) => void;
+      sendEvent: (msg: { event: string; args: unknown[] }) => void;
+    };
   };
 }

@@ -4,6 +4,7 @@ import UICloseButton from './UICloseButton';
 
 type Props = {
   children: React.ReactNode;
+  footer?: React.ReactNode;
   onClose?: () => void;
   width?: number;
   title?: string;
@@ -15,6 +16,7 @@ type Props = {
 
 export default function UIModal({
   children,
+  footer,
   onClose,
   width = 420,
   title,
@@ -63,6 +65,11 @@ export default function UIModal({
           </div>
         )}
         <div className="min-h-0 overflow-auto p-5">{children}</div>
+        {footer && (
+          <div className={cn('shrink-0 border-t px-5 py-3', isDark ? 'border-slate-700' : 'border-slate-200')}>
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );

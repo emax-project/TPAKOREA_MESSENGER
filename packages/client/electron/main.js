@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog, session, safeStorage, powerMonitor } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog, session, safeStorage, powerMonitor, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -863,6 +863,56 @@ ipcMain.handle('open-second-window', () => {
   openSecondWindow();
 });
 
+// ── 팝업 대화창 ↔ 메인 창 소켓 중계 ───────────────────────────────────
+// 서버 실시간 연결은 메인 창 하나만 유지하고, 팝업 대화창은 이 중계를 통해 이벤트를 받고 보낸다.
+// 메인 창이 아직 준비되지 않았거나 닫혀 있으면 available이 false라서 팝업이 자체 연결로 대신한다.
+let socketRelayHost = null;
+const isChatPopupWindow = (w) =>
+  !!w && !w.isDestroyed() && typeof w.__emaxInitialRoute === 'string' && w.__emaxInitialRoute.startsWith('/chat/');
+const relayHostAlive = () => !!socketRelayHost && !socketRelayHost.isDestroyed();
+
+function broadcastRelayEvent(payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (isChatPopupWindow(w)) w.webContents.send('socket-relay:event', payload);
+  }
+}
+
+ipcMain.on('socket-relay:host-register', (event) => {
+  // 메인 창만 호스트가 될 수 있다(팝업·두 번째 창이 연결을 가로채지 못하게)
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  socketRelayHost = event.sender;
+});
+
+ipcMain.on('socket-relay:host-unregister', (event) => {
+  if (socketRelayHost !== event.sender) return;
+  socketRelayHost = null;
+  broadcastRelayEvent({ event: '__disconnect', args: ['relay-host-gone'] });
+});
+
+ipcMain.handle('socket-relay:available', (event) => isChatPopupWindow(BrowserWindow.fromWebContents(event.sender)) && relayHostAlive());
+
+ipcMain.on('socket-relay:request', (event, msg) => {
+  if (!isChatPopupWindow(BrowserWindow.fromWebContents(event.sender)) || !msg || typeof msg.reqId !== 'number') return;
+  if (!relayHostAlive()) {
+    event.sender.send('socket-relay:response', { reqId: msg.reqId, error: 'RELAY_UNAVAILABLE' });
+    return;
+  }
+  socketRelayHost.send('socket-relay:request', { ...msg, from: event.sender.id });
+});
+
+ipcMain.on('socket-relay:response', (event, msg) => {
+  if (event.sender !== socketRelayHost || !msg) return;
+  const target = webContents.fromId(msg.to);
+  if (!target || target.isDestroyed()) return;
+  const { to: _to, ...rest } = msg;
+  target.send('socket-relay:response', rest);
+});
+
+ipcMain.on('socket-relay:event', (event, msg) => {
+  if (event.sender !== socketRelayHost || !msg || typeof msg.event !== 'string') return;
+  broadcastRelayEvent({ event: msg.event, args: Array.isArray(msg.args) ? msg.args : [] });
+});
+
 ipcMain.handle('open-chat-window', (_, roomId) => {
   if (roomId) openChatWindow(roomId);
 });
@@ -1055,7 +1105,12 @@ ipcMain.handle('download-file-stream', async (event, { messageId, filename }) =>
   const url = `${trustedBaseUrl.replace(/\/$/, '')}/files/download/${messageId}`;
   try {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok || !res.body) return { ok: false, error: `HTTP_${res.status}` };
+    if (!res.ok) {
+      const failure = await res.json().catch(() => null);
+      const error = failure?.code === 'FILE_DOWNLOAD_DISABLED' ? failure.code : `HTTP_${res.status}`;
+      return { ok: false, error };
+    }
+    if (!res.body) return { ok: false, error: 'DOWNLOAD_FAILED' };
     await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(target));
     return { ok: true, path: target };
   } catch (err) {
@@ -1243,6 +1298,10 @@ ipcMain.handle('open-update-download', (_, version) => {
 });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.on('print-memo', (event) => {
+  event.sender.print();
+});
 
 ipcMain.handle('get-app-info', () => ({
   version: app.getVersion(),

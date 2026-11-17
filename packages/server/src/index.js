@@ -38,7 +38,7 @@ import { pollsRouter } from './routes/polls.js';
 import { projectsRouter } from './routes/projects.js';
 import { bookmarksRouter } from './routes/bookmarks.js';
 import { mentionsRouter } from './routes/mentions.js';
-import { memosRouter } from './routes/memos.js';
+import { memosRouter, startScheduledMemos } from './routes/memos.js';
 import { linkPreviewRouter } from './routes/linkPreview.js';
 import { foldersRouter } from './routes/folders.js';
 import { orgGroupsRouter } from './routes/orgGroups.js';
@@ -263,6 +263,7 @@ async function main() {
   await prisma.$connect();
   await runMigrations();
   startCleanupJob();
+  startScheduledMemos(io);
   const host = process.env.HOST || '0.0.0.0';
   httpServer.listen(PORT, host, () => {
     console.log(`Server running at http://${host}:${PORT}`);

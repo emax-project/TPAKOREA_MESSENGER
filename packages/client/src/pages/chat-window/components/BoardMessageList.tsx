@@ -2,11 +2,28 @@ import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetSta
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { Message, ReactionGroup, Room } from '../../../api';
 import EventCard from '../../../components/EventCard';
+import UserAvatar from '../../../components/UserAvatar';
 import PollCard from '../../../components/PollCard';
 import FileMessage from '../../../components/FileMessage';
 import LinkPreview, { extractFirstUrl } from '../../../components/LinkPreview';
 import { cn } from '../../../utils/cn';
 import { formatDateLabel, getDateKey, isSystemMessage, renderMessageContent, HIDE_CONTEXT_ATTACH } from '../utils';
+
+/** 보드뷰 글·댓글의 작성자 아바타: 프로필 사진이 있으면 사진, 없으면 이름 첫 글자(일반 대화창과 같은 방식) */
+function SenderAvatar({ message, room, isDark, size, fontSize }: { message: Message; room?: Room; isDark: boolean; size: number; fontSize: number }) {
+  return (
+    <span className="shrink-0 rounded-full overflow-hidden" style={{ width: size, height: size }} aria-hidden>
+      <UserAvatar
+        userId={message.senderId}
+        name={message.sender?.name ?? '?'}
+        avatarUrlPath={message.sender?.avatarUrl ?? room?.members.find((member) => member.id === message.senderId)?.avatarUrl}
+        style={{ width: '100%', height: '100%', borderRadius: '50%' }}
+        imgStyle={{ objectFit: 'cover' }}
+        initialStyle={{ display: 'grid', placeItems: 'center', fontSize, fontWeight: 700, background: isDark ? '#334155' : '#e2e8f0', color: isDark ? '#94a3b8' : '#64748b' }}
+      />
+    </span>
+  );
+}
 
 type BoardMessageListProps = {
   rootPosts: Message[];
@@ -92,9 +109,7 @@ export default function BoardMessageList({
         <div key={m.id} className={cn('w-full max-w-full p-4 rounded-xl flex flex-col gap-3', isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200', 'border shadow-sm')}>
           <div className="flex items-center justify-between gap-2.5 flex-wrap">
             <div className="flex items-center gap-2.5 min-w-0">
-              <span className={cn('w-10 h-10 rounded-full flex items-center justify-center text-[15px] font-bold shrink-0', isDark ? 'bg-slate-700 text-slate-400' : 'bg-slate-200 text-slate-500')}>
-                {m.sender?.name?.trim()?.[0]?.toUpperCase() || '?'}
-              </span>
+              <SenderAvatar message={m} room={room} isDark={isDark} size={40} fontSize={15} />
               <div className="flex flex-col gap-0.5 min-w-0">
                 <span className={cn('text-sm font-semibold', isDark ? 'text-slate-200' : 'text-slate-900')}>
                   {m.sender?.name ?? '알 수 없음'}
@@ -125,9 +140,7 @@ export default function BoardMessageList({
       >
         <div className="flex items-center justify-between gap-2.5 flex-wrap">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className={cn('w-10 h-10 rounded-full flex items-center justify-center text-[15px] font-bold shrink-0', isDark ? 'bg-slate-700 text-slate-400' : 'bg-slate-200 text-slate-500')}>
-              {m.sender?.name?.trim()?.[0]?.toUpperCase() || '?'}
-            </span>
+            <SenderAvatar message={m} room={room} isDark={isDark} size={40} fontSize={15} />
             <div className="flex flex-col gap-0.5 min-w-0">
               <span className={cn('text-sm font-semibold', isDark ? 'text-slate-200' : 'text-slate-900')}>
                 {m.sender?.name ?? '알 수 없음'}
@@ -233,9 +246,7 @@ export default function BoardMessageList({
                 className={cn('flex items-start gap-2 py-1 border-b pb-2.5', isDark ? 'border-slate-700/40' : 'border-slate-200/60')}
                 onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, message: reply }); }}
               >
-                <span className={cn('w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0', isDark ? 'bg-slate-700 text-slate-400' : 'bg-slate-200 text-slate-500')}>
-                  {reply.sender?.name?.trim()?.[0]?.toUpperCase() || '?'}
-                </span>
+                <SenderAvatar message={reply} room={room} isDark={isDark} size={28} fontSize={11} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className={cn('text-[13px] font-semibold', isDark ? 'text-slate-200' : 'text-slate-800')}>

@@ -1,3 +1,4 @@
+import MemoSchedulePicker from './MemoSchedulePicker';
 import { memo, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { orgApi, memosApi, usersApi, type OrgUser } from '../api';
@@ -13,19 +14,22 @@ type MemoComposeModalProps = {
   onClose: () => void;
   onSent?: () => void;
   initialRecipientIds?: string[];
+  initialRecipients?: OrgUser[];
+  initialBody?: string;
 };
 
-function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoComposeModalProps) {
+function MemoComposeModal({ onClose, onSent, initialRecipientIds = [], initialRecipients = [], initialBody = '' }: MemoComposeModalProps) {
   const myId = useAuthStore((s) => s.user?.id);
   const isDark = useThemeStore((s) => s.isDark);
   const showToast = useToastStore((s) => s.show);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(initialRecipientIds));
+  const [selected, setSelected] = useState<Set<string>>(() => new Set([...initialRecipientIds, ...initialRecipients.map((user) => user.id)]));
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedProfiles, setSelectedProfiles] = useState<Record<string, OrgUser>>({});
+  const [selectedProfiles, setSelectedProfiles] = useState<Record<string, OrgUser>>(() => Object.fromEntries(initialRecipients.map((user) => [user.id, user])));
   const [pickerOpen, setPickerOpen] = useState(false);
   const [orgPickerOpen, setOrgPickerOpen] = useState(false);
   const [collapsedDepartments, setCollapsedDepartments] = useState<Set<string>>(new Set());
-  const [body, setBody] = useState('');
+  const [body, setBody] = useState(initialBody);
+  const [sendAt, setSendAt] = useState('');
   const [loading, setLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -135,14 +139,20 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
     }
     // 제목 입력란을 없앤 대신, 쪽지함 목록에 쓸 제목을 본문 첫 줄에서 자동으로 뽑는다.
     const autoSubject = trimmedBody.split('\n')[0].slice(0, 60) || '(제목 없음)';
+    const scheduled = sendAt ? new Date(sendAt) : null;
+    if (scheduled && (!Number.isFinite(scheduled.getTime()) || scheduled <= new Date())) {
+      showToast('예약 시간을 미래로 설정해 주세요.', 'error');
+      return;
+    }
     setLoading(true);
     try {
       await memosApi.send({
         recipientIds: [...selected],
         subject: autoSubject,
         body: trimmedBody,
+        scheduledAt: scheduled?.toISOString(),
       });
-      showToast('쪽지를 보냈습니다.', 'success');
+      showToast(scheduled ? '쪽지 발송을 예약했습니다.' : '쪽지를 보냈습니다.', 'success');
       onSent?.();
       onClose();
     } catch (err) {
@@ -158,7 +168,18 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
   };
 
   return (
-    <UIModal onClose={onClose} title="쪽지 쓰기" width={orgPickerOpen ? 720 : 520} overlayPosition="absolute">
+    <UIModal
+      onClose={onClose}
+      title="쪽지 쓰기"
+      width={orgPickerOpen ? 720 : 520}
+      overlayPosition="absolute"
+      footer={(
+        <ModalFooter marginTop={0}>
+          <UIButton variant="secondary" onClick={onClose} disabled={loading}>취소</UIButton>
+          <UIButton onClick={() => void handleSend()} disabled={loading}>{loading ? '전송 중...' : sendAt ? '예약하기' : '보내기'}</UIButton>
+        </ModalFooter>
+      )}
+    >
       <div className="flex flex-col gap-3">
         <div>
           <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -411,17 +432,13 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
             placeholder="내용을 입력하세요"
             rows={8}
             className={cn(
-              'w-full rounded-xl border px-3 py-2 text-sm outline-none resize-y min-h-[160px] font-inherit',
+              'block w-full rounded-xl border px-3 py-2 text-sm outline-none resize-y min-h-[160px] font-inherit',
               isDark ? 'border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500' : 'border-slate-200 bg-white text-slate-800 placeholder:text-slate-400',
             )}
           />
         </div>
+        <MemoSchedulePicker value={sendAt} onChange={setSendAt} isDark={isDark} />
       </div>
-
-      <ModalFooter>
-        <UIButton variant="secondary" onClick={onClose} disabled={loading}>취소</UIButton>
-        <UIButton onClick={() => void handleSend()} disabled={loading}>{loading ? '전송 중...' : '보내기'}</UIButton>
-      </ModalFooter>
     </UIModal>
   );
 }

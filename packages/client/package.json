@@ -111,6 +111,7 @@
       "allowToChangeInstallationDirectory": false,
       "allowElevation": true,
       "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": "always",
       "shortcutName": "CSIN-Tech"
     },
     "extraMetadata": {
