@@ -33,8 +33,6 @@ function limiter({ windowMs, limit, message, keyGenerator = actorKey }) {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator,
-    // 키가 IP로 떨어지는 경우의 IPv6 안내 경고는 끈다(사용자 키가 기본이고 IP는 비로그인 요청의 보조 수단)
-    validate: { keyGeneratorIpFallback: false },
     handler: (_req, res) => res.status(429).json({ error: message }),
   });
 }
