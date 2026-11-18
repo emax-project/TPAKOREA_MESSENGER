@@ -22,7 +22,7 @@ const SIZE_MAP: Record<EmaxLogoSize, number> = {
 const TAGLINE_SCALE = 0.21;
 const TAGLINE_TRACKING_EM = 0.42;
 
-const LOGO_SRC = `${import.meta.env.BASE_URL}emax-logo.png`;
+const LOGO_SRC = `${import.meta.env.BASE_URL}tpa-icon.png`;
 
 export function EmaxLogo({
   variant = 'dark',

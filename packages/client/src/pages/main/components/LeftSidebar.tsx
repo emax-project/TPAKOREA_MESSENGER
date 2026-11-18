@@ -145,7 +145,7 @@ function LeftSidebar({
 
   const avatarSrc = user?.avatarUrl
     ? `${getBaseUrl()}${user.avatarUrl}`
-    : `${import.meta.env.BASE_URL}emax-logo.png`;
+    : `${import.meta.env.BASE_URL}tpa-icon.png`;
 
   return (
     <aside

@@ -118,7 +118,7 @@ export default function TitleBar({
   const brand = showBrand ? (
     <span className="flex min-w-0 items-center gap-1.5 self-center">
       {showLogo && (
-        <img src={`${import.meta.env.BASE_URL}emax-logo.png`} alt="" width={16} height={16} className="shrink-0 object-contain" draggable={false} />
+        <img src={`${import.meta.env.BASE_URL}tpa-icon.png`} alt="" width={16} height={16} className="shrink-0 object-contain" draggable={false} />
       )}
       <span className={cn(titleClass, 'max-w-full')}>{title}</span>
     </span>

@@ -1,9 +1,7 @@
 import type { ReactNode } from 'react';
 import { cn } from '../utils/cn';
 
-// TODO: TPA코리아 전용 로고 파일을 받으면 `public/tpa-logo.png`로 추가하고 이 경로를 교체할 것.
-// 그 전까지는 거래처(CSIN) 로고가 잘못 노출되는 것을 막기 위해 범용 EMAX 로고로 대체.
-const LOGO_SRC = `${import.meta.env.BASE_URL}emax-logo.png`;
+const LOGO_SRC = `${import.meta.env.BASE_URL}tpa-logo.png`;
 
 type Props = {
   children: ReactNode;
