@@ -8,15 +8,17 @@ const DEFAULT_BASE =
 const API_URL_KEY = 'emax_api_url';
 
 /**
- * 과거 빌드 기본값(HTTP) — 로그인 시 서버 주소가 localStorage에 저장되어 빌드 기본값보다 우선하므로,
- * 이 값들이 저장돼 있으면 무시·삭제해 새 빌드 기본값(HTTPS)으로 옮겨가게 한다.
+ * 로그인 시 저장된 서버 주소(localStorage)는 빌드 기본값보다 우선한다. 그런데 이 앱은 userData 폴더가
+ * 다른 브랜드(CSIN-Tech 등) 빌드와 "client"로 겹칠 수 있어, 남의 서버 주소가 저장돼 있으면
+ * 빌드 기본값(HTTPS)을 무시하고 엉뚱한 주소로 붙어 "서버에 연결할 수 없습니다"가 난다.
+ * 서버 주소를 사용자가 직접 바꾸는 UI가 없으므로, 빌드 기본값과 다른 저장값은 stale로 보고 삭제한다.
  */
-const LEGACY_API_URLS = new Set(['http://114.203.209.5:3001', 'http://121.143.3.163:3030']);
-
 function readSavedBaseUrl(): string | null {
   let saved: string | null = null;
   try { saved = localStorage.getItem(API_URL_KEY); } catch { return null; }
-  if (saved && LEGACY_API_URLS.has(saved.replace(/\/$/, ''))) {
+  if (!saved) return null;
+  const buildBase = import.meta.env.VITE_API_URL;
+  if (buildBase && saved.replace(/\/$/, '') !== buildBase.replace(/\/$/, '')) {
     try { localStorage.removeItem(API_URL_KEY); } catch { /* ignore */ }
     return null;
   }

@@ -5,15 +5,11 @@ const { pathToFileURL } = require('url');
 const { pipeline } = require('node:stream/promises');
 const { Readable } = require('node:stream');
 
-// package.json의 "name"은 모든 브랜드 빌드(EMAX-Hub/CSIN-Tech/TPA-Korea 등)에서
-// "client"로 동일해서, setName()을 안 하면 app.getPath('userData')가 전부 같은
-// 폴더를 가리킨다 — 결과적으로 같은 PC에 여러 브랜드를 설치하면 로그인 시 저장한
-// 서버 주소 등 localStorage가 브랜드 간에 섞인다. build.productName으로 분리한다.
-try {
-  const pkg = require('../package.json');
-  const productName = pkg.build && pkg.build.productName;
-  if (productName) app.setName(productName);
-} catch { /* ignore */ }
+// userData 폴더를 브랜드별로 분리한다(Roaming/TPA-Korea). package.json의 "name"은 모든 브랜드 빌드에서
+// "client"로 같아서, 이름을 지정하지 않으면 같은 PC의 다른 브랜드 앱과 localStorage(서버 주소 등)가 섞인다.
+// 패키징된 앱에서는 package.json의 build.productName을 읽지 못해 setName이 실행되지 않았으므로 직접 지정한다(CSIN-Tech와 동일).
+// 반드시 app.getPath('userData')를 처음 쓰기 전에 호출할 것.
+app.setName('TPA-Korea');
 
 // Windows: GPU 렌더링 문제로 검은 화면 발생 시 소프트웨어 렌더링 강제
 if (process.platform === 'win32') {
