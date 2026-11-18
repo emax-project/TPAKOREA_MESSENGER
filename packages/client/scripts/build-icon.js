@@ -4,8 +4,9 @@ const fs = require('fs');
 const png2icons = require('png2icons');
 
 const clientRoot = path.join(__dirname, '..');
-const logoPath = path.join(clientRoot, 'public', 'emax-logo.svg');
-const logoPngPath = path.join(clientRoot, 'public', 'emax-logo.png');
+// TPA KOREA 육각형 심볼(투명 배경, 검정) — 흰 배경 위에 얹어 앱 아이콘을 만든다.
+const logoPath = path.join(clientRoot, 'public', 'tpa-icon.png');
+const logoPngPath = logoPath;
 const outDir = path.join(clientRoot, 'build', 'icons');
 
 /** macOS 스타일 둥근 모서리 적용 (radius ≈ 22%) */
@@ -17,9 +18,22 @@ function roundedRectMask(size) {
   return Buffer.from(svg);
 }
 
+/** 흰 정사각 배경 중앙에 심볼을 배치 (심볼 비율 ≈ 60%) */
+async function onWhiteSquare(inputBuffer, size) {
+  const symbol = await sharp(inputBuffer)
+    .resize(Math.round(size * 0.6), Math.round(size * 0.6), { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer();
+  return sharp({ create: { width: size, height: size, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } } })
+    .composite([{ input: symbol, gravity: 'centre' }])
+    .png()
+    .toBuffer();
+}
+
 async function applyRoundedCorners(inputBuffer, size) {
   const maskSvg = roundedRectMask(size);
-  return sharp(inputBuffer)
+  const base = await onWhiteSquare(inputBuffer, size);
+  return sharp(base)
     .resize(size, size)
     .composite([{ input: maskSvg, blend: 'dest-in' }])
     .png()
