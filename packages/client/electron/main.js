@@ -1138,22 +1138,16 @@ function setupAutoUpdate() {
     pendingUpdateVersion = info?.version || null;
     updateDownloadedPending = true;
     const isMac = process.platform === 'darwin';
+    // 사용 중 자동 재시작하지 않는다. Windows는 앱을 종료할 때(autoInstallOnAppQuit) 설치되고,
+    // 바로 적용하려면 설정 화면의 '지금 재시작'(quit-and-install)을 쓴다. (CSIN-Tech와 동일)
     showCustomNotification(
       'TPA-Korea 업데이트 준비됨',
       isMac
         ? '설정에서 DMG를 다운로드해 Applications에 다시 설치해 주세요.'
-        : '3초 후 앱이 자동으로 재시작됩니다.',
+        : '앱을 종료하면 새 버전이 설치됩니다. 지금 적용하려면 설정에서 재시작해 주세요.',
     );
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
       mainWindow.webContents.send('update-downloaded');
-    }
-    if (!isMac) {
-      setTimeout(() => {
-        if (updateDownloadedPending && app.isPackaged && !isDev) {
-          updateDownloadedPending = false;
-          autoUpdater.quitAndInstall(false, true);
-        }
-      }, 3000);
     }
   });
   autoUpdater.on('error', (err) => {
