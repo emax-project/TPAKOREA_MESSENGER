@@ -60,6 +60,8 @@ export async function syncPartnerOrg(opts = {}) {
     usersMatched: 0,
     usersCreated: 0,
     usersUpdated: 0,
+    usersEmailMigrated: 0,
+    migratedEmails: /** @type {string[]} */ ([]),
     usersUnmatched: 0,
     usersSkippedInvalidEmail: 0,
     usersIdentityMismatch: 0,
@@ -87,6 +89,14 @@ export async function syncPartnerOrg(opts = {}) {
         })
       : [];
     const existingSet = new Set(existing.map((u) => u.email.toLowerCase()));
+    const dryIds = employees.map((e) => e.masterId).filter(Boolean);
+    const existingById = dryIds.length
+      ? await prisma.user.findMany({
+          where: { externalEmpId: { in: dryIds } },
+          select: { externalEmpId: true },
+        })
+      : [];
+    const existingIdSet = new Set(existingById.map((u) => u.externalEmpId));
     for (const e of employees) {
       if (!e.email) {
         stats.employeesWithoutEmail += 1;
@@ -98,7 +108,11 @@ export async function syncPartnerOrg(opts = {}) {
       }
       if (!e.deptCode) stats.employeesWithoutDept += 1;
       if (existingSet.has(e.email)) stats.usersMatched += 1;
-      else if (createMissingUsers && e.name) {
+      else if (e.masterId && existingIdSet.has(e.masterId)) {
+        stats.usersEmailMigrated += 1;
+        stats.usersMatched += 1;
+        if (stats.migratedEmails.length < 50) stats.migratedEmails.push(e.email);
+      } else if (createMissingUsers && e.name) {
         stats.usersCreated += 1;
         if (stats.createdEmails.length < 50) stats.createdEmails.push(e.email);
       } else {
@@ -166,6 +180,17 @@ export async function syncPartnerOrg(opts = {}) {
     : [];
   const userByEmail = new Map(users.map((u) => [u.email.toLowerCase(), u]));
 
+  // 사번(externalEmpId)으로도 매칭: 이전에 가상 이메일(사번@...local)로 만들어진 계정이
+  // ERP에 실제 이메일이 생긴 뒤에도 같은 사람으로 이어지도록 한다.
+  const masterIds = [...new Set(employees.map((e) => e.masterId).filter(Boolean))];
+  const usersById = masterIds.length
+    ? await prisma.user.findMany({
+        where: { externalEmpId: { in: masterIds } },
+        select: { id: true, email: true, departmentId: true, name: true, phone: true, jobTitle: true, externalEmpId: true },
+      })
+    : [];
+  const userByEmpId = new Map(usersById.map((u) => [u.externalEmpId, u]));
+
   let passwordHash = null;
   if (createMissingUsers) {
     passwordHash = await bcrypt.hash(defaultPassword, 10);
@@ -183,6 +208,21 @@ export async function syncPartnerOrg(opts = {}) {
     if (!e.deptCode) stats.employeesWithoutDept += 1;
 
     let user = userByEmail.get(e.email);
+    if (!user && e.masterId) {
+      const byId = userByEmpId.get(e.masterId);
+      if (byId && byId.email.toLowerCase() !== e.email) {
+        try {
+          await prisma.user.update({ where: { id: byId.id }, data: { email: e.email } });
+          user = { ...byId, email: e.email };
+          userByEmail.set(e.email, user);
+          stats.usersEmailMigrated += 1;
+          stats.usersMatched += 1;
+          if (stats.migratedEmails.length < 50) stats.migratedEmails.push(e.email);
+        } catch (err) {
+          console.error('[syncPartnerOrg] email migrate failed', byId.email, '->', e.email, err?.message || err);
+        }
+      }
+    }
     if (!user) {
       if (!createMissingUsers || !e.name) {
         stats.usersUnmatched += 1;
