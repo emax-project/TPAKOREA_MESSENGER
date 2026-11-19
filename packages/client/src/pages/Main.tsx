@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Socket } from 'socket.io-client';
 import { useAuthStore, useThemeStore, useToastStore } from '../store';
-import { roomsApi, orgApi, announcementApi, eventsApi, usersApi, mentionsApi, memosApi, foldersApi, orgGroupsApi, authApi, appSettingsApi, type Room, type OrgCompany, type OrgDepartment, type OrgUser, type OrgGroup, type Event, type Folder, type UserAffiliation } from '../api';
+import { roomsApi, orgApi, announcementApi, eventsApi, usersApi, mentionsApi, memosApi, foldersApi, orgGroupsApi, authApi, appSettingsApi, ssoApi, type Room, type OrgCompany, type OrgDepartment, type OrgUser, type OrgGroup, type Event, type Folder, type UserAffiliation } from '../api';
 import MemoComposeModal from '../components/MemoComposeModal';
 import ToastProvider from '../components/ui/ToastProvider';
 import TitleBar, { MacInsetChromeTools } from '../components/TitleBar';
@@ -32,7 +32,7 @@ import { cn } from '../utils/cn';
 import { filterDepartments, flattenDepartments, defaultOpenDepartmentIds, companyUserCount, visibleOpenDepartmentIds } from '../utils/orgTree';
 import { presenceFromList, type OnlinePresenceMap } from '../utils/presence';
 import { openChatRoomWindow } from '../utils/chatPopout';
-import { openGroupware } from '../utils/groupware';
+import { openGroupwareWithSso } from '../utils/groupware';
 
 const STATUS_OPTIONS = [
   { id: '온라인', label: '온라인' },
@@ -506,6 +506,11 @@ export default function Main() {
     enabled: !!token,
   });
   const groupwareUrl = groupwareSetting?.url?.trim() || (import.meta.env.VITE_GROUPWARE_URL || '').trim();
+  const { data: groupwareSso } = useQuery({
+    queryKey: ['settings', 'groupware-sso'],
+    queryFn: appSettingsApi.getGroupwareSso,
+    enabled: !!token,
+  });
   const { data: events = [] } = useQuery<Event[]>({ queryKey: ['events'], queryFn: eventsApi.list, enabled: !!token });
   const { data: mentions = [] } = useQuery({ queryKey: ['mentions'], queryFn: mentionsApi.list, enabled: !!token && activePanel === 'notifications' });
   const { data: unreadMentionCount } = useQuery({ queryKey: ['mentions', 'unread-count'], queryFn: mentionsApi.unreadCount, enabled: !!token, refetchInterval: 30000 });
@@ -808,7 +813,15 @@ export default function Main() {
       if (user?.isAdmin) setActivePanel('settings');
       return;
     }
-    openGroupware(groupwareUrl);
+    void openGroupwareWithSso(groupwareUrl, groupwareUrl, groupwareSso, ssoApi.createToken);
+  };
+  /** 메일 버튼: 관리자가 지정한 메일 주소가 있으면 그 주소를, 없으면 그룹웨어를 연다. SSO가 켜져 있으면 토큰으로 연다. */
+  const handleOpenMail = () => {
+    if (!mailSiteUrl) {
+      handleOpenGroupware();
+      return;
+    }
+    void openGroupwareWithSso(groupwareUrl, mailSiteUrl, groupwareSso, ssoApi.createToken);
   };
   const handleSaveStatusProfile = async () => {
     try {
@@ -1221,6 +1234,7 @@ export default function Main() {
           externalSiteUrl={externalSiteUrl}
           onOpenExternalSite={handleOpenExternalSite}
           mailSiteUrl={mailSiteUrl}
+          onOpenMail={handleOpenMail}
           onOpenGroupware={handleOpenGroupware}
         />
 

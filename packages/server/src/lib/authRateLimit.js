@@ -56,3 +56,7 @@ export const mfaSensitiveLimiter = limiter({ windowMs: MINUTE, limit: 10, messag
 export const loginLimiter = limiter({ windowMs: MINUTE, limit: 20, message: TOO_MANY, keyGenerator: loginKey });
 /** 파일 업로드 — 사용자당 분당 60회(자원 소모 방어) */
 export const fileUploadLimiter = limiter({ windowMs: MINUTE, limit: 60, message: TOO_MANY });
+/** 그룹웨어 SSO 토큰 발급 — 사용자당 분당 30회 */
+export const ssoTokenLimiter = limiter({ windowMs: MINUTE, limit: 30, message: TOO_MANY });
+/** 그룹웨어 SSO 토큰 검증 — 그룹웨어 서버가 부르는 경로라 IP(프록시 뒤면 한 묶음) 기준으로 넉넉히(분당 300회) */
+export const ssoVerifyLimiter = limiter({ windowMs: MINUTE, limit: 300, message: TOO_MANY, keyGenerator: (req) => `sso-verify:${req.ip}` });

@@ -53,6 +53,8 @@ services:
       LDAP_EMAIL_DOMAIN: ${LDAP_EMAIL_DOMAIN:-csin.kr}
       LDAP_TLS_REJECT_UNAUTHORIZED: ${LDAP_TLS_REJECT_UNAUTHORIZED:-true}
       LDAP_LOCAL_EXCEPTIONS: ${LDAP_LOCAL_EXCEPTIONS:-}
+      # 그룹웨어 SSO: 그룹웨어 서버가 토큰 검증 API(/sso/verify)를 부를 때 보내는 공유 키. 비어 있으면 검증 API가 꺼진다(503).
+      SSO_SHARED_KEY: ${SSO_SHARED_KEY:-}
     # ldap.csin.kr은 사내망 전용 도메인이라 공인 DNS로 못 찾는다. 컨테이너
     # 내부 /etc/hosts에 직접 등록해서, 호스트 머신의 hosts 파일/DNS 설정과
     # 무관하게 항상 붙도록 한다. (IP가 바뀌면 이 값도 같이 바꿔야 함)

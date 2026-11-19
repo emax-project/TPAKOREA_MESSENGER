@@ -38,6 +38,8 @@ type LeftSidebarProps = {
   onOpenExternalSite?: () => void;
   /** 관리자가 지정한 메일 주소. 비어 있으면 메일 버튼은 그룹웨어를 연다. */
   mailSiteUrl?: string;
+  /** 메일 버튼 동작(관리자 지정 주소 → 없으면 그룹웨어, SSO 적용). */
+  onOpenMail?: () => void;
   onOpenGroupware?: () => void;
 };
 
@@ -108,6 +110,7 @@ function LeftSidebar({
   externalSiteUrl,
   onOpenExternalSite,
   mailSiteUrl,
+  onOpenMail,
   onOpenGroupware,
 }: LeftSidebarProps) {
   const macDrag = isMacElectron();
@@ -189,16 +192,7 @@ function LeftSidebar({
         <button
           type="button"
           style={{ ...btnStyle(false), ...(macDrag ? electronNoDragStyle : {}) }}
-          onClick={() => {
-            const target = mailSiteUrl?.trim();
-            if (!target) {
-              onOpenGroupware?.();
-              return;
-            }
-            const openExternal = window.electronAPI?.openExternal;
-            if (openExternal) void openExternal(target);
-            else window.open(target, '_blank', 'noopener,noreferrer');
-          }}
+          onClick={() => onOpenMail?.()}
           title={mailSiteUrl ? `메일\n${mailSiteUrl}` : '메일'}
           className={electronNoDragClass}
         >

@@ -704,6 +704,14 @@ export type FileAuditEntry = {
   createdAt: string;
 };
 
+/** 그룹웨어 SSO 설정 — 켜져 있으면 그룹웨어 버튼이 1회용 토큰을 받아 `주소+path?token=`으로 연다. */
+export type GroupwareSsoSetting = { enabled: boolean; path: string };
+
+export const ssoApi = {
+  /** 로그인한 사용자 본인의 그룹웨어 SSO 1회용 토큰 발급(유효 약 60초) */
+  createToken: () => api.post('/sso/token', {}) as Promise<{ token: string; expiresIn: number }>,
+};
+
 export const appSettingsApi = {
   getExternalSite: () => api.get('/settings/external-site') as Promise<{ url: string }>,
   putExternalSite: (url: string) =>
@@ -714,6 +722,9 @@ export const appSettingsApi = {
   getGroupwareUrl: () => api.get('/settings/groupware-url') as Promise<{ url: string }>,
   putGroupwareUrl: (url: string) =>
     api.put('/settings/groupware-url', { url }) as Promise<{ url: string }>,
+  getGroupwareSso: () => api.get('/settings/groupware-sso') as Promise<GroupwareSsoSetting>,
+  putGroupwareSso: (enabled: boolean, path: string) =>
+    api.put('/settings/groupware-sso', { enabled, path }) as Promise<GroupwareSsoSetting>,
   getSecurity: () => api.get('/settings/security') as Promise<SecurityPolicy>,
   putSecurity: (patch: SecurityPolicyPatch) => api.put('/settings/security', patch) as Promise<SecurityPolicy>,
   fileAudit: (opts: { blockedOnly?: boolean; limit?: number } = {}) =>

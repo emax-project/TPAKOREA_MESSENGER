@@ -18,6 +18,16 @@ export function startCleanupJob() {
     }
   });
 
+  // 만료된 그룹웨어 SSO 토큰 정리 (매시 5분) — 유효 시간이 60초라 1시간 지난 건 모두 지워도 된다
+  cron.schedule('5 * * * *', async () => {
+    try {
+      const { count } = await prisma.ssoToken.deleteMany({ where: { expiresAt: { lt: new Date(Date.now() - 60 * 60 * 1000) } } });
+      if (count > 0) console.log(`[cleanup] SSO 토큰 ${count}건 삭제`);
+    } catch (err) {
+      console.error('[cleanup] SSO 토큰 정리 실패:', err);
+    }
+  });
+
   // Run every hour at minute 0
   cron.schedule('0 * * * *', async () => {
     console.log('[cleanup] Starting expired file cleanup...');

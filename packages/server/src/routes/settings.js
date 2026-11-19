@@ -3,6 +3,7 @@ import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
 import { assertAdmin } from '../lib/admin.js';
 import { isBlockedHostname } from '../lib/ssrfGuard.js';
+import { SSO_DEFAULT_PATH, normalizeSsoPath } from '../lib/ssoToken.js';
 import { ALWAYS_BLOCKED_EXTENSIONS, getSecurityPolicy, saveSecurityPolicy } from '../lib/securityPolicy.js';
 
 export const settingsRouter = Router();
@@ -11,6 +12,8 @@ settingsRouter.use(authMiddleware);
 const EXTERNAL_SITE_KEY = 'external_site_url';
 const MAIL_SITE_KEY = 'mail_site_url';
 const GROUPWARE_URL_KEY = 'groupware_url';
+const SSO_ENABLED_KEY = 'groupware_sso_enabled';
+const SSO_PATH_KEY = 'groupware_sso_path';
 
 // 이 값은 클라이언트가 window.open/openExternal로 "열기"만 하는 용도입니다.
 // 서버가 이 URL을 직접 fetch/요청하는 기능을 추가할 경우 SSRF가 될 수 있으므로,
@@ -90,6 +93,35 @@ registerLinkSetting('/external-site', EXTERNAL_SITE_KEY, '링크');
 registerLinkSetting('/mail-site', MAIL_SITE_KEY, '메일 링크');
 /** 사이드바 "그룹웨어" 버튼 주소 (비어 있으면 버튼이 동작하지 않는다) */
 registerLinkSetting('/groupware-url', GROUPWARE_URL_KEY, '그룹웨어');
+
+/** 그룹웨어 SSO 설정 조회 (로그인한 모든 사용자) — 켜져 있으면 클라이언트가 1회용 토큰을 받아 그룹웨어를 연다 */
+settingsRouter.get('/groupware-sso', async (_req, res) => {
+  try {
+    const [enabled, path] = await Promise.all([readSetting(SSO_ENABLED_KEY), readSetting(SSO_PATH_KEY)]);
+    return res.json({ enabled: enabled === '1', path: path || SSO_DEFAULT_PATH });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'SSO 설정을 불러오지 못했습니다' });
+  }
+});
+
+/** 그룹웨어 SSO 설정 저장 (관리자만). body: { enabled: boolean, path?: string } */
+settingsRouter.put('/groupware-sso', async (req, res) => {
+  try {
+    if (!(await assertAdmin(req, res))) return;
+    const parsed = normalizeSsoPath(req.body?.path);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const enabled = req.body?.enabled === true;
+    for (const [key, value] of [[SSO_ENABLED_KEY, enabled ? '1' : '0'], [SSO_PATH_KEY, parsed.path]]) {
+      await prisma.appSetting.upsert({ where: { key }, create: { key, value }, update: { value } });
+    }
+    return res.json({ enabled, path: parsed.path });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'SSO 설정을 저장하지 못했습니다' });
+  }
+});
+
 
 /**
  * 보안 정책 조회 (로그인한 모든 사용자) — 자동 화면 잠금 시간, 2차 인증 정책, 파일 전송 통제.

@@ -88,6 +88,7 @@ model User {
   department      Department?   @relation(fields: [departmentId], references: [id])
   affiliations    UserAffiliation[]
   sessions        UserSession[]
+  ssoTokens       SsoToken[]
   createdRooms    Room[]        @relation("RoomCreator")
   deviceTokens    DeviceToken[]
   sentMemos       Memo[]           @relation("SentMemos")
@@ -241,6 +242,19 @@ model UserSession {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+/// 그룹웨어 SSO용 1회용 토큰 — 원문은 저장하지 않고 SHA-256 해시만 둔다. 짧은 유효시간(기본 60초) 안에 한 번만 검증된다.
+model SsoToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
 }
 
 model Reaction {
