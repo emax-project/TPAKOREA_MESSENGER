@@ -69,6 +69,12 @@ try {
   npm run db:generate
   if ($LASTEXITCODE -ne 0) { throw "prisma generate 실패" }
 
+  # db push는 유니크 제약 추가를 "데이터 손실 가능"으로 보고 거부해 서버가 못 뜨므로,
+  # 새 컬럼의 유니크 인덱스를 먼저 만들어 둔다(IF NOT EXISTS라 반복 실행 안전, 새 DB면 건너뜀).
+  Write-Host "==> pre-push.sql (유니크 인덱스 선적용)"
+  npx prisma db execute --schema prisma/schema.prisma --file prisma/pre-push.sql
+  if ($LASTEXITCODE -ne 0) { throw "pre-push.sql 실행 실패" }
+
   Write-Host "==> prisma db push (스키마 반영 — 데이터 손실이 생기는 변경이면 거부하고 멈춤)"
   npx prisma db push --skip-generate
   if ($LASTEXITCODE -ne 0) { throw "prisma db push 실패 — 데이터 손실 경고라면 수동 확인 필요(--accept-data-loss 금지)" }
