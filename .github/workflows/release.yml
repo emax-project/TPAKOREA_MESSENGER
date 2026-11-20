@@ -2,6 +2,10 @@
 # v* 태그를 push 하면 macOS(.dmg)와 Windows(.exe) 설치파일을 빌드해
 # 같은 태그의 GitHub Release 에 업로드합니다. (GitHub 호스팅 러너 사용)
 # 수동 실행 시에도 태그를 지정하면 동작합니다.
+#
+# 업로드는 초안(draft)으로만 하고, macOS·Windows 빌드가 모두 성공하고 필요한 파일이
+# 다 올라간 것을 확인한 뒤에 publish 잡이 공개(Latest)한다. 한쪽 빌드가 실패한 채로
+# 공개되면 그 OS 사용자는 자동 업데이트를 받지 못하기 때문이다.
 
 name: Release Installers
 
@@ -39,17 +43,38 @@ jobs:
 
       - name: Build installer
         working-directory: packages/client
+        shell: bash
         env:
           # TPA코리아 이맥스 자체 서버 — Caddy(3443) HTTPS → node 3001 (docs/HTTPS-TPAKOREA.md)
           VITE_API_URL: https://msg.tpakorea-gw.co.kr:3443
+          # ── 코드 서명 (저장소 Settings > Secrets 에 등록하면 자동으로 서명된다) ──
+          # CSC_LINK: 인증서(.pfx / .p12) 파일을 base64로 인코딩한 값 또는 https URL
+          # CSC_KEY_PASSWORD: 인증서 비밀번호
+          # Windows는 인증서의 CN이 업데이트 서명 검증용 발행자 이름(publisherName)으로 자동 설정되어,
+          # 이후 자동 업데이트 때 "같은 발행자가 서명한 설치 파일인지"까지 검증한다.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # macOS 공증(notarization): 아래 3개가 모두 있으면 자동으로 공증한다
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          args=()
+          if [ -n "$CSC_LINK" ]; then
+            # 서명 실패를 조용히 넘기고 서명 안 된 파일이 배포되는 일이 없도록 실패 처리한다
+            args+=(--config.forceCodeSigning=true)
+          else
+            echo "::warning::코드 서명 인증서(CSC_LINK 시크릿)가 없어 서명되지 않은 설치 파일이 만들어집니다. 배포 전에 인증서를 등록하세요."
+          fi
           npm run build:icon
-          npm run ${{ matrix.build_script }}
+          npm run "${{ matrix.build_script }}" -- ${args[@]+"${args[@]}"}
 
       - name: Upload installers to release
         uses: softprops/action-gh-release@v2
         with:
           name: TPA-Korea ${{ github.ref_name }}
+          # 공개는 아래 publish 잡이 한다(두 OS 빌드가 모두 성공했을 때만)
+          draft: true
           files: |
             packages/client/release/*.dmg
             packages/client/release/*.exe
@@ -59,3 +84,27 @@ jobs:
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    # build 매트릭스(macOS·Windows)가 모두 성공해야 실행된다. 태그로 실행된 경우에만 공개한다.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check assets and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          echo "$assets"
+          missing=0
+          for f in "TPA-Korea-Setup-${VERSION}.exe" "TPA-Korea-${VERSION}-arm64.dmg" "TPA-Korea-${VERSION}-arm64-mac.zip" latest.yml latest-mac.yml; do
+            if ! grep -qxF "$f" <<< "$assets"; then echo "::error::릴리즈에 $f 가 없습니다"; missing=1; fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::필요한 설치·업데이트 파일이 빠져 있어 공개하지 않고 초안으로 둡니다."
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

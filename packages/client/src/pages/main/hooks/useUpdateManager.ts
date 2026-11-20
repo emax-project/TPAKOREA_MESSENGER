@@ -54,7 +54,7 @@ export function useUpdateManager({ hasElectron, electronPlatform, activePanel, s
         if (r.currentVersion) {
           setAppInfo((prev) => (prev ? { ...prev, version: r.currentVersion! } : prev));
         }
-        setUpdateStatus(r.downloaded ? 'ready' : 'downloading');
+        setUpdateStatus(r.downloaded || requiresManualInstall ? 'ready' : 'available');
       } else {
         setUpdateStatus('latest');
         if (r.currentVersion) {
@@ -89,7 +89,6 @@ export function useUpdateManager({ hasElectron, electronPlatform, activePanel, s
     const result = await window.electronAPI.quitAndInstall();
     if (result?.requiresManualInstall || result?.success === false) {
       showToast?.(result?.error || '자동 설치에 실패했습니다. 설치 파일을 직접 받아 주세요.', 'error');
-      await handleOpenUpdateDownload();
     }
   };
 

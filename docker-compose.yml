@@ -53,13 +53,20 @@ services:
       LDAP_EMAIL_DOMAIN: ${LDAP_EMAIL_DOMAIN:-csin.kr}
       LDAP_TLS_REJECT_UNAUTHORIZED: ${LDAP_TLS_REJECT_UNAUTHORIZED:-true}
       LDAP_LOCAL_EXCEPTIONS: ${LDAP_LOCAL_EXCEPTIONS:-}
+      # 그룹웨어 SSO: 그룹웨어 서버가 토큰 검증 API(/sso/verify)를 부를 때 보내는 공유 키. 비어 있으면 검증 API가 꺼진다(503).
+      SSO_SHARED_KEY: ${SSO_SHARED_KEY:-}
     # ldap.csin.kr은 사내망 전용 도메인이라 공인 DNS로 못 찾는다. 컨테이너
     # 내부 /etc/hosts에 직접 등록해서, 호스트 머신의 hosts 파일/DNS 설정과
     # 무관하게 항상 붙도록 한다. (IP가 바뀌면 이 값도 같이 바꿔야 함)
     extra_hosts:
       - "ldap.csin.kr:192.168.123.247"
+    # 3001 포트가 외부에 열려 있어야 하는 이유가 없다면(Caddy가 같은 compose 안에서
+    # server:3001로 연결하는 경우) .env에 SERVER_BIND=127.0.0.1 을 넣어 외부 게시를 막는다.
+    # 사내 리버스 프록시가 다른 서버에서 이 호스트의 3001로 연결하는 구성이면
+    # 그 프록시 쪽 IP(예: 사내 IP)를 넣거나 방화벽으로 허용 대상만 열어야 한다.
+    # 기본값(0.0.0.0)은 기존 동작과 같다.
     ports:
-      - "3001:3001"
+      - "${SERVER_BIND:-0.0.0.0}:3001:3001"
     depends_on:
       db:
         condition: service_healthy

@@ -2,9 +2,10 @@ import { useEffect } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
-import { filesApi, getBaseUrl, getSocketUrl, navigateToLogin, type Message, type Room } from '../../../api';
+import { getSocketUrl, navigateToLogin, type Message, type Room } from '../../../api';
 import { useMainSocketStore } from '../../../store';
 import { playNotificationSound } from '../../../utils/notificationSound';
+import { isNotificationPopupEnabled } from '../../../utils/notificationPopup';
 import {
   detectClientDevice,
   mergePresence,
@@ -140,56 +141,15 @@ export function useMainSocket({
         const room = rooms.find((r) => r.id === msg.roomId);
         const isTopic = !!room?.isTopic;
         const roomName = room?.name ?? '';
-        const title = isTopic && roomName ? `${roomName} 아젠다` : senderName;
-        const body = isTopic && roomName ? `${senderName}: ${msg.fileUrl && msg.fileName ? msg.fileName : msg.content}` : (msg.fileUrl && msg.fileName ? msg.fileName : msg.content);
+        // 화면 공유·주변 시선 등으로 팝업이 노출될 수 있어, 프로필 사진·대화 내용은 절대
+        // 보여주지 않는다 — 누가(발신자) 왔는지만 알리고 내용은 "메시지가 도착하였습니다."로 고정.
+        const title = isTopic && roomName ? `[${roomName} 아젠다] ${senderName}` : `[대화방] ${senderName}`;
+        const body = '메시지가 도착하였습니다.';
         playNotificationSound();
         const electronAPI = window.electronAPI;
-        if (electronAPI?.showNotification) {
-          (async () => {
-            let icon: string | null = null;
-            let imagePreview: string | null = null;
-            const base = getBaseUrl();
-            if (token && base) {
-              try {
-                if (isTopic && msg.roomId && electronAPI.fetchRoomAvatar) {
-                  icon = await Promise.race([
-                    electronAPI.fetchRoomAvatar(msg.roomId, base, token),
-                    new Promise<null>((r) => setTimeout(() => r(null), 250)),
-                  ]);
-                } else if (msg.senderId && electronAPI.fetchUserAvatar) {
-                  icon = await Promise.race([
-                    electronAPI.fetchUserAvatar(msg.senderId),
-                    new Promise<null>((r) => setTimeout(() => r(null), 250)),
-                  ]);
-                }
-              } catch {
-                // ignore
-              }
-            }
-            if (msg.fileUrl && msg.fileMimeType?.startsWith('image/')) {
-              try {
-                const blob = await Promise.race([
-                  filesApi.fetchBlob(msg.id),
-                  new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 400)),
-                ]);
-                imagePreview = await new Promise<string>((resolve, reject) => {
-                  const r = new FileReader();
-                  r.onload = () => resolve(r.result as string);
-                  r.onerror = () => reject(new Error('read failed'));
-                  r.readAsDataURL(blob);
-                });
-                if (imagePreview.length > 80 * 1024) imagePreview = null;
-              } catch {
-                // ignore
-              }
-            }
-            try {
-              electronAPI.showNotification(title, body, msg.roomId, icon, imagePreview);
-            } catch {
-              electronAPI.showNotification(title, body, msg.roomId);
-            }
-          })();
-        } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        if (isNotificationPopupEnabled() && electronAPI?.showNotification) {
+          electronAPI.showNotification(title, body, msg.roomId);
+        } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           if (typeof document !== 'undefined' && document.hidden) new Notification(title, { body });
         }
       }
@@ -233,16 +193,7 @@ export function useMainSocket({
         setOnlinePresence((prev) => mergePresence(prev, uid, payload.devices ?? null, payload.device));
         setOnlineUserIds((prev) => new Set([...prev, uid]));
       }
-      if (payload.userId && String(payload.userId) !== String(myIdRef.current)) {
-        const name = payload.userName?.trim() || String(payload.userId);
-        const title = 'TPA-Korea';
-        const body = `${name}님이 로그인했습니다.`;
-        if (window.electronAPI?.showNotification) {
-          window.electronAPI.showNotification(title, body);
-        } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
-          new Notification(title, { body });
-        }
-      }
+      // 다른 사용자 로그인 팝업 알림은 업무 방해 민원으로 제거함 (온라인 상태 표시는 그대로 유지).
     });
     s.on('user_presence', (payload: {
       userId?: string;
@@ -275,12 +226,13 @@ export function useMainSocket({
       queryClient.invalidateQueries({ queryKey: ['memos'] });
       if (notificationsSnoozedUntilRef.current > Date.now()) return;
       const title = payload.senderName ? `쪽지: ${payload.senderName}` : '새 쪽지';
-      const body = payload.subject || '';
+      // 제목(subject)도 내용 유출이 될 수 있어 보여주지 않는다.
+      const body = '메시지가 도착하였습니다.';
       playNotificationSound();
       const electronAPI = window.electronAPI;
-      if (electronAPI?.showNotification) {
+      if (isNotificationPopupEnabled() && electronAPI?.showNotification) {
         electronAPI.showNotification(title, body);
-      } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+      } else if (isNotificationPopupEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
         new Notification(title, { body });
       }
     });

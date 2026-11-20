@@ -12,6 +12,7 @@ import UIModal from '../../../components/ui/UIModal';
 import { useAccentStyles } from '../../../hooks/useAccentStyles';
 import AdminSection from './AdminSection';
 import PasswordChangeModal from './PasswordChangeModal';
+import MfaSettingsModal from './MfaSettingsModal';
 
 type StatusOption = { id: string; label: string };
 
@@ -121,6 +122,7 @@ function ProfileActions({ isDark }: { isDark: boolean }) {
   const accent = useAccentStyles(isDark);
   const [editOpen, setEditOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
+  const [mfaOpen, setMfaOpen] = useState(false);
 
   const btnStyle = {
     flex: 1,
@@ -154,8 +156,17 @@ function ProfileActions({ isDark }: { isDark: boolean }) {
       >
         비밀번호 변경
       </button>
+      <button
+        type="button"
+        style={{ ...btnStyle, ...accent.secondaryStyle }}
+        className="transition-colors hover:brightness-95"
+        onClick={() => setMfaOpen(true)}
+      >
+        2차 인증
+      </button>
       {editOpen && <ProfileEditModal isDark={isDark} onClose={() => setEditOpen(false)} />}
       {pwOpen && <PasswordChangeModal isDark={isDark} onClose={() => setPwOpen(false)} />}
+      {mfaOpen && <MfaSettingsModal isDark={isDark} onClose={() => setMfaOpen(false)} />}
     </>
   );
 }
@@ -167,9 +178,11 @@ type SettingsPanelProps = {
   user: { id: string; name?: string | null; email?: string | null; avatarUrl?: string | null; isAdmin?: boolean; phone?: string | null; jobTitle?: string | null } | null | undefined;
   notificationsSnoozedUntil: number;
   notificationSoundEnabled: boolean;
+  notificationPopupEnabled: boolean;
   snoozeNotifications: (minutes: number) => void;
   clearSnooze: () => void;
   toggleNotificationSound: () => void;
+  toggleNotificationPopup: () => void;
   toggleDark: () => void;
   accentTheme: OrgThemeId;
   onAccentThemeChange: (id: OrgThemeId) => void;
@@ -218,9 +231,11 @@ function SettingsPanel({
   user,
   notificationsSnoozedUntil,
   notificationSoundEnabled,
+  notificationPopupEnabled,
   snoozeNotifications,
   clearSnooze,
   toggleNotificationSound,
+  toggleNotificationPopup,
   toggleDark,
   accentTheme,
   onAccentThemeChange,
@@ -435,6 +450,16 @@ function SettingsPanel({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' as const, gap: 10, padding: '12px 14px', borderRadius: 10, background: isDark ? '#334155' : '#f8fafc' }}>
+          <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 2 }}>
+            <span style={{ fontSize: 14, fontWeight: 500, color: isDark ? '#e2e8f0' : '#0f172a' }}>알림 팝업</span>
+            <span style={{ fontSize: 11.5, color: isDark ? '#94a3b8' : '#64748b' }}>화면 우측 하단에 새 메시지 알림 창을 띄웁니다</span>
+          </div>
+          <button type="button" onClick={toggleNotificationPopup} style={{ width: 48, height: 28, borderRadius: 14, border: 'none', background: notificationPopupEnabled ? toggleColor : (isDark ? '#475569' : '#e2e8f0'), cursor: 'pointer', position: 'relative' as const, padding: 0, flexShrink: 0 }}>
+            <span style={{ position: 'absolute' as const, top: 3, left: notificationPopupEnabled ? 23 : 3, width: 22, height: 22, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' as const, gap: 10, padding: '12px 14px', borderRadius: 10, background: isDark ? '#334155' : '#f8fafc' }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: isDark ? '#e2e8f0' : '#0f172a' }}>다크 모드</span>
           <button type="button" onClick={toggleDark} style={{ width: 48, height: 28, borderRadius: 14, border: 'none', background: isDark ? '#171717' : '#e2e8f0', cursor: 'pointer', position: 'relative' as const, padding: 0, flexShrink: 0 }}>
             <span style={{ position: 'absolute' as const, top: 3, left: isDark ? 23 : 3, width: 22, height: 22, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
@@ -553,6 +578,7 @@ function SettingsPanel({
                 <span style={{ fontSize: 13, color: isDark ? '#94a3b8' : '#64748b' }}>
                   {appVersion ? `현재 버전 v${appVersion}` : '버전 확인 중...'}
                   {updateStatus === 'downloading' && updateVersion && ` · 새 버전 v${updateVersion} 다운로드 중`}
+                  {updateStatus === 'available' && updateVersion && ` · 새 버전 v${updateVersion} 다운로드 가능`}
                   {updateStatus === 'ready' && updateVersion && ` · v${updateVersion} 설치 가능`}
                   {updateStatus === 'latest' && ' · 최신 버전입니다'}
                   {updateStatus === 'error' && updateError && ` · ${updateError}`}

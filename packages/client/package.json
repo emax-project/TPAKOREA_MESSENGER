@@ -31,6 +31,7 @@
     "@tiptap/starter-kit": "^3.31.3",
     "dompurify": "^3.4.17",
     "electron-updater": "^6.7.3",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.4",
@@ -46,6 +47,7 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/dompurify": "^3.0.5",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
@@ -62,7 +64,7 @@
     "png-to-ico": "^3.0.1",
     "png2icons": "^2.0.1",
     "postcss": "^8.5.8",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4.2.2",
     "typescript": "^5.6.3",
     "vite": "^6.4.3",
@@ -85,6 +87,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "!electron/**/*.test.js",
       "build/icons/**"
     ],
     "mac": {
@@ -104,7 +107,15 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": false,
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": "always",
+      "shortcutName": "TPA-Korea"
+    },
+    "extraMetadata": {
+      "name": "tpa-korea"
     }
   }
 }

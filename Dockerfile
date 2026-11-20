@@ -24,4 +24,4 @@ COPY packages/server/src ./src
 COPY packages/server/scripts ./scripts
 COPY --from=client-builder /app/packages/client/dist ./client-dist
 EXPOSE 3001
-CMD ["sh", "-c", "npx prisma db push && node src/index.js"]
+CMD ["sh", "-c", "npx prisma db execute --schema prisma/schema.prisma --file prisma/pre-push.sql && npx prisma db push && node src/index.js"]

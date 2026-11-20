@@ -10,6 +10,20 @@ export function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 }
 
+/**
+ * 용도가 정해진 단기 토큰(2차 인증 진행용). 세션 토큰과 달리 sessionId가 없어
+ * authMiddleware(verifySessionToken)에서는 절대 통과하지 못한다.
+ */
+export function signPurposeToken(purpose, payload, expiresIn = '5m') {
+  return jwt.sign({ ...payload, purpose }, JWT_SECRET, { expiresIn });
+}
+
+export function verifyPurposeToken(token, purpose) {
+  const payload = verifyToken(token);
+  if (!payload || payload.purpose !== purpose || !payload.userId || payload.sessionId) return null;
+  return payload;
+}
+
 export function verifyToken(token) {
   try {
     return jwt.verify(token, JWT_SECRET);

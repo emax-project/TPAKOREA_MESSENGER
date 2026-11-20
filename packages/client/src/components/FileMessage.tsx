@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { type Message, filesApi } from '../api';
-import { useThemeStore } from '../store';
+import { useThemeStore, useToastStore } from '../store';
 import UICloseButton from './ui/UICloseButton';
 import { cn } from '../utils/cn';
 
@@ -76,6 +76,8 @@ export default function FileMessage({ message }: Props) {
     };
   }, [id, fileMimeType, fileUrl]);
 
+  const showToast = useToastStore((state) => state.show);
+
   if (!fileUrl) {
     return (
       <span className={cn('text-[13px] italic', isDark ? 'text-slate-500' : 'text-slate-500')}>
@@ -92,7 +94,7 @@ export default function FileMessage({ message }: Props) {
     try {
       await filesApi.download(id, fileName);
     } catch (err) {
-      console.error('Download failed:', err);
+      showToast(err instanceof Error ? `다운로드 실패 · ${err.message}` : '다운로드에 실패했습니다.', 'error');
     }
   };
 

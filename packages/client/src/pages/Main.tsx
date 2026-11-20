@@ -3,11 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Socket } from 'socket.io-client';
 import { useAuthStore, useThemeStore, useToastStore } from '../store';
-import { roomsApi, orgApi, announcementApi, eventsApi, usersApi, mentionsApi, memosApi, foldersApi, orgGroupsApi, authApi, appSettingsApi, type Room, type OrgCompany, type OrgDepartment, type OrgUser, type OrgGroup, type Event, type Folder, type UserAffiliation } from '../api';
+import { roomsApi, orgApi, announcementApi, eventsApi, usersApi, mentionsApi, memosApi, foldersApi, orgGroupsApi, authApi, appSettingsApi, ssoApi, type Room, type OrgCompany, type OrgDepartment, type OrgUser, type OrgGroup, type Event, type Folder, type UserAffiliation } from '../api';
 import MemoComposeModal from '../components/MemoComposeModal';
 import ToastProvider from '../components/ui/ToastProvider';
 import TitleBar, { MacInsetChromeTools } from '../components/TitleBar';
-import AppLockOverlay from '../components/AppLockOverlay';
+import { useScreenLockStore } from '../utils/screenLock';
 import { applyWindowPinClass, isMacElectron, isWinElectron } from '../utils/electronChrome';
 import {
   normalizeTimeRange,
@@ -18,6 +18,7 @@ import { useUpdateManager } from './main/hooks/useUpdateManager';
 import { useNotificationPrefs } from './main/hooks/useNotificationPrefs';
 import { playNotificationSound } from '../utils/notificationSound';
 import { useMainSocket } from './main/hooks/useMainSocket';
+import { useSocketRelayHost } from './main/hooks/useSocketRelayHost';
 import { useMainContentActions } from './main/hooks/useMainContentActions';
 import LeftSidebar from './main/components/LeftSidebar';
 import RoomListItem from './main/components/RoomListItem';
@@ -29,9 +30,9 @@ import MainOverlays from './main/components/MainOverlays';
 import PasswordChangeModal from './main/components/PasswordChangeModal';
 import { cn } from '../utils/cn';
 import { filterDepartments, flattenDepartments, defaultOpenDepartmentIds, companyUserCount, visibleOpenDepartmentIds } from '../utils/orgTree';
-import { APP_MAX_WIDTH, APP_WINDOW_HEIGHT } from '../layout/constants';
 import { presenceFromList, type OnlinePresenceMap } from '../utils/presence';
 import { openChatRoomWindow } from '../utils/chatPopout';
+import { openGroupwareWithSso } from '../utils/groupware';
 
 const STATUS_OPTIONS = [
   { id: '온라인', label: '온라인' },
@@ -123,14 +124,12 @@ export default function Main() {
   const navigate = useNavigate();
   const token = useAuthStore((s) => s.token);
 
-  // Electron: 메인 화면에서는 모바일 규격 창 크기를 일관되게 유지한다.
+  // Electron: 메인 화면 진입 시 창 크기를 '마지막으로 사용자가 조정한 크기'로 복원한다
+  // (최초 실행 시에만 기본 모바일 규격을 쓰고, 이후에는 메인 프로세스가 기억한 크기를 적용 — main.js 참고).
+  // 창 자체는 계속 자유롭게 리사이즈 가능하므로, 조직도 편집 등 넓은 화면이 필요할 때 PC에서 드래그로 넓힐 수 있다.
   useEffect(() => {
     if (!token || !window.electronAPI) return;
     void window.electronAPI.setWindowUiMode?.('main');
-    const resize = () => window.electronAPI!.windowResize(APP_MAX_WIDTH, APP_WINDOW_HEIGHT);
-    resize();
-    const t = setTimeout(resize, 300);
-    return () => clearTimeout(t);
   }, [token]);
   const user = useAuthStore((s) => s.user);
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
@@ -181,7 +180,7 @@ export default function Main() {
       return 'split';
     }
   });
-  const [screenLocked, setScreenLocked] = useState(false);
+  const lockScreen = useScreenLockStore((s) => s.lock);
   const [askSaveAs, setAskSaveAs] = useState(false);
   const autoAwayRef = useRef(false);
   const [roomSearchQuery, setRoomSearchQuery] = useState('');
@@ -227,7 +226,7 @@ export default function Main() {
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [onlinePresence, setOnlinePresence] = useState<OnlinePresenceMap>({});
   const [showMemoCompose, setShowMemoCompose] = useState(false);
-  const [memoComposeRecipients, setMemoComposeRecipients] = useState<string[]>([]);
+  const [memoCompose, setMemoCompose] = useState<{ ids: string[]; recipients?: OrgUser[]; body?: string }>({ ids: [] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; user: OrgUser; orgGroupId?: string; selectedUsers?: OrgUser[] } | null>(null);
   const [addToGroupUsers, setAddToGroupUsers] = useState<OrgUser[] | null>(null);
   const [profileModalUser, setProfileModalUser] = useState<OrgUser | null>(null);
@@ -243,12 +242,14 @@ export default function Main() {
     mutedRoomIds,
     notificationsSnoozedUntil,
     notificationSoundEnabled,
+    notificationPopupEnabled,
     mutedRoomIdsRef,
     notificationsSnoozedUntilRef,
     toggleMuteRoom,
     snoozeNotifications,
     clearSnooze,
     toggleNotificationSound,
+    toggleNotificationPopup,
   } = useNotificationPrefs(showToast);
   const {
     appVersion,
@@ -287,6 +288,7 @@ export default function Main() {
   // --- Queries ---
   const { data: allRooms = [], isError: roomsError } = useQuery<Room[]>({ queryKey: ['rooms', myId], queryFn: roomsApi.list, enabled: !!myId });
   const { data: folders = [] } = useQuery<Folder[]>({ queryKey: ['folders'], queryFn: foldersApi.list, enabled: !!myId });
+  useSocketRelayHost();
   useMainSocket({
     token,
     queryClient,
@@ -498,11 +500,22 @@ export default function Main() {
     enabled: !!token,
   });
   const mailSiteUrl = mailSiteSetting?.url?.trim() || '';
+  const { data: groupwareSetting } = useQuery({
+    queryKey: ['settings', 'groupware-url'],
+    queryFn: appSettingsApi.getGroupwareUrl,
+    enabled: !!token,
+  });
+  const groupwareUrl = groupwareSetting?.url?.trim() || (import.meta.env.VITE_GROUPWARE_URL || '').trim();
+  const { data: groupwareSso } = useQuery({
+    queryKey: ['settings', 'groupware-sso'],
+    queryFn: appSettingsApi.getGroupwareSso,
+    enabled: !!token,
+  });
   const { data: events = [] } = useQuery<Event[]>({ queryKey: ['events'], queryFn: eventsApi.list, enabled: !!token });
   const { data: mentions = [] } = useQuery({ queryKey: ['mentions'], queryFn: mentionsApi.list, enabled: !!token && activePanel === 'notifications' });
   const { data: unreadMentionCount } = useQuery({ queryKey: ['mentions', 'unread-count'], queryFn: mentionsApi.unreadCount, enabled: !!token, refetchInterval: 30000 });
   const { data: memoInbox = [] } = useQuery({ queryKey: ['memos', 'inbox'], queryFn: memosApi.inbox, enabled: !!token && activePanel === 'memo' });
-  const { data: memoSent = [] } = useQuery({ queryKey: ['memos', 'sent'], queryFn: memosApi.sent, enabled: !!token && activePanel === 'memo' });
+  const { data: memoSent = [] } = useQuery({ queryKey: ['memos', 'sent'], queryFn: memosApi.sent, enabled: !!token && activePanel === 'memo', refetchInterval: 15000 });
   const { data: unreadMemoCount } = useQuery({ queryKey: ['memos', 'unread-count'], queryFn: memosApi.unreadCount, enabled: !!token, refetchInterval: 30000 });
   const { data: publicRooms = [] } = useQuery({ queryKey: ['rooms', 'public'], queryFn: roomsApi.listPublic, enabled: !!token && activePanel === 'rooms' && sectionOpen.topic });
 
@@ -750,6 +763,7 @@ export default function Main() {
   }, []);
   const handleToggleFavorite = async (room: Room) => { try { await roomsApi.toggleFavorite(room.id, !room.isFavorite); queryClient.invalidateQueries({ queryKey: ['rooms'] }); } catch (err) { console.error(err); } setRoomContextMenu(null); };
   const handleToggleMuteRoom = (roomId: string) => { toggleMuteRoom(roomId); setRoomContextMenu(null); };
+  const handleOpenRoomInNewWindow = (roomId: string) => { openChatWindow(roomId); setRoomContextMenu(null); };
   const handleLeaveRoom = async (roomId: string) => { if (!confirm('채팅방을 나가시겠습니까?')) { setRoomContextMenu(null); return; } try { await roomsApi.leave(roomId); queryClient.invalidateQueries({ queryKey: ['rooms'] }); } catch (err) { console.error(err); } setRoomContextMenu(null); };
   const handleSwitchAffiliation = async (departmentId: string) => {
     try {
@@ -787,6 +801,27 @@ export default function Main() {
     const openExternal = window.electronAPI?.openExternal;
     if (openExternal) void openExternal(url);
     else window.open(url, '_blank', 'noopener,noreferrer');
+  };
+  const handleOpenGroupware = () => {
+    if (!groupwareUrl) {
+      showToast(
+        user?.isAdmin
+          ? '설정에서 그룹웨어 주소를 먼저 저장해 주세요'
+          : '관리자가 아직 그룹웨어 주소를 설정하지 않았습니다',
+        'error',
+      );
+      if (user?.isAdmin) setActivePanel('settings');
+      return;
+    }
+    void openGroupwareWithSso(groupwareUrl, groupwareUrl, groupwareSso, ssoApi.createToken);
+  };
+  /** 메일 버튼: 관리자가 지정한 메일 주소가 있으면 그 주소를, 없으면 그룹웨어를 연다. SSO가 켜져 있으면 토큰으로 연다. */
+  const handleOpenMail = () => {
+    if (!mailSiteUrl) {
+      handleOpenGroupware();
+      return;
+    }
+    void openGroupwareWithSso(groupwareUrl, mailSiteUrl, groupwareSso, ssoApi.createToken);
   };
   const handleSaveStatusProfile = async () => {
     try {
@@ -938,7 +973,7 @@ export default function Main() {
     }
   }, [navigate, queryClient]);
   const handleOpenMemoCompose = useCallback((recipientIds: string[] = []) => {
-    setMemoComposeRecipients(recipientIds);
+    setMemoCompose({ ids: recipientIds });
     setShowMemoCompose(true);
   }, []);
   const handleMemoSent = useCallback(() => {
@@ -1177,7 +1212,6 @@ export default function Main() {
           onSettings={() => setActivePanel((p) => (p === 'settings' ? 'none' : 'settings'))}
         />
       )}
-      {screenLocked && <AppLockOverlay onUnlock={() => setScreenLocked(false)} />}
       <div className="flex flex-1 flex-row min-h-0 min-w-0">
         <LeftSidebar
           isDark={isDark}
@@ -1194,12 +1228,14 @@ export default function Main() {
           affiliations={affiliationData?.affiliations ?? []}
           onSwitchAffiliation={(id) => { void handleSwitchAffiliation(id); }}
           currentDeptLabel={currentDeptLabel}
-          onLock={() => setScreenLocked(true)}
+          onLock={lockScreen}
           onLogout={handleLogout}
           onQuit={hasElectron ? handleQuitApp : undefined}
           externalSiteUrl={externalSiteUrl}
           onOpenExternalSite={handleOpenExternalSite}
           mailSiteUrl={mailSiteUrl}
+          onOpenMail={handleOpenMail}
+          onOpenGroupware={handleOpenGroupware}
         />
 
         <div className={cn('flex-1 min-h-0 min-w-0 flex flex-col', isDark ? 'bg-slate-900' : 'bg-white')}>
@@ -1233,6 +1269,27 @@ export default function Main() {
                 inbox: Array.isArray(memoInbox) ? memoInbox : [],
                 sent: Array.isArray(memoSent) ? memoSent : [],
                 onOpenCompose: () => handleOpenMemoCompose(),
+                onComposeFromMemo: (recipients, body) => {
+                  setMemoCompose({ ids: [], recipients, body });
+                  setShowMemoCompose(true);
+                },
+                onChat: handleOpenDirectMessage,
+                onProfile: async (sender) => {
+                  try {
+                    setProfileModalUser(await usersApi.get(sender.id));
+                  } catch {
+                    showToast('보낸 사람의 프로필을 불러오지 못했습니다.', 'error');
+                  }
+                },
+                onRefresh: handleMemoSent,
+                onFavorite: async (memo) => {
+                  try {
+                    await memosApi.setFavorite(memo.id, !memo.favorite);
+                    handleMemoSent();
+                  } catch {
+                    showToast('관심 쪽지를 변경하지 못했습니다.', 'error');
+                  }
+                },
                 onMarkRead: handleMarkMemoRead,
                 onDelete: handleDeleteMemo,
               }}
@@ -1314,9 +1371,11 @@ export default function Main() {
               settingsProps={{
                 notificationsSnoozedUntil,
                 notificationSoundEnabled,
+                notificationPopupEnabled,
                 snoozeNotifications,
                 clearSnooze,
                 toggleNotificationSound,
+                toggleNotificationPopup,
                 toggleDark,
                 accentTheme,
                 onAccentThemeChange: setAccentTheme,
@@ -1409,12 +1468,13 @@ export default function Main() {
         mutedRoomIds={mutedRoomIds}
         onToggleFavorite={handleToggleFavorite}
         onToggleMuteRoom={handleToggleMuteRoom}
+        onOpenRoomInNewWindow={handleOpenRoomInNewWindow}
         onLeaveRoom={handleLeaveRoom}
         profileModalUser={profileModalUser}
         onlineUserIds={onlineUserIds}
         onSendMemoToUser={handleSendMemoToUser}
         onSendMemoToUsers={(ids) => {
-          setMemoComposeRecipients(ids);
+          setMemoCompose({ ids });
           setShowMemoCompose(true);
           setContextMenu(null);
         }}
@@ -1425,7 +1485,9 @@ export default function Main() {
 
       {showMemoCompose && (
         <MemoComposeModal
-          initialRecipientIds={memoComposeRecipients}
+          initialRecipientIds={memoCompose.ids}
+          initialRecipients={memoCompose.recipients}
+          initialBody={memoCompose.body}
           onClose={() => setShowMemoCompose(false)}
           onSent={handleMemoSent}
         />

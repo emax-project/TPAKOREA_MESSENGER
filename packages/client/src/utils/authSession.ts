@@ -39,8 +39,11 @@ export function clearSessionDate(): void {
  * 평문 localStorage에는 남기지 않는다(기존에 저장된 평문 토큰은 1회 자동 이전 후 삭제).
  */
 export function getActiveToken(): string | null {
+  return isSessionFromToday() ? getStoredToken() : null;
+}
+
+export function getStoredToken(): string | null {
   try {
-    if (!isSessionFromToday()) return null;
     const api = typeof window !== 'undefined' ? window.electronAPI : undefined;
     if (api?.readTokenSync) {
       const secure = api.readTokenSync();

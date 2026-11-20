@@ -1,4 +1,5 @@
 import { clearSessionDate, getActiveToken, removeStoredToken } from './utils/authSession';
+import { evaluateFilePolicy } from './utils/filePolicy';
 
 // 빈 문자열이면 같은 origin 사용(배포 시 같은 서버에서 API·웹 서빙), 없으면 로컬 개발용
 /** 거래처 사외 기본 API (UTM 1442: 121.143.3.163:3030 → 192.168.123.210:3001) */
@@ -111,10 +112,10 @@ function handleForcedLogout(path: string, status: number, serverMessage?: string
 }
 
 export const api = {
-  async post(path: string, body: object) {
+  async post(path: string, body: object, requestHeaders = headers()) {
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method: 'POST',
-      headers: headers(),
+      headers: requestHeaders,
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
@@ -194,6 +195,14 @@ export const api = {
   },
 };
 
+export type LoginSuccess = { user: User; token: string; mustChangePassword?: boolean };
+/** 2차 인증이 필요하면 세션 토큰 대신 5분짜리 중간 토큰(mfaToken)이 온다 */
+export type LoginResponse =
+  | (LoginSuccess & { mfaRequired?: undefined; mfaSetupRequired?: undefined; mfaToken?: undefined })
+  | { mfaRequired: true; mfaSetupRequired?: undefined; mfaToken: string }
+  | { mfaSetupRequired: true; mfaRequired?: undefined; mfaToken: string };
+export type MfaStatus = { enabled: boolean; required: boolean; recoveryCodesLeft: number };
+
 export type User = { id: string; email: string; name: string; phone?: string | null; extension?: string | null; deskPhone?: string | null; jobTitle?: string | null; createdAt?: string; isAdmin?: boolean; statusMessage?: string | null; statusNote?: string | null; notepad?: string | null; avatarUrl?: string; mustChangePassword?: boolean };
 
 export type UserAffiliation = {
@@ -232,6 +241,10 @@ export type OrgUser = {
   companyName?: string | null;
   /** 소속 회사 주소 */
   companyAddress?: string | null;
+  /** 같은 부서 안에서의 조회 순번. 작을수록 먼저 나온다(관리자 화면에서만 의미 있음). */
+  sortOrder?: number;
+  /** false면 겸직(세컨더리 소속)으로 이 부서에 걸린 사람 — 이 부서 안에서 순번을 갖지 않는다. */
+  primary?: boolean;
 };
 export type OrgDepartment = {
   id: string;
@@ -297,6 +310,8 @@ export type Room = {
 
 export type Message = {
   id: string;
+  /** 보낸 사람이 만든 전송 고유 키(재전송 중복 방지용). 키를 안 보내는 구버전이 보낸 메시지는 null */
+  clientMessageId?: string | null;
   roomId: string;
   senderId: string;
   content: string;
@@ -397,11 +412,32 @@ export const authApi = {
     api.put('/auth/password', { currentPassword, newPassword }) as Promise<{ ok: boolean }>,
   passwordPolicy: () => api.get('/auth/password-policy') as Promise<PasswordPolicy>,
   login: (email: string, password: string) =>
-    api.post('/auth/login', { email, password }) as Promise<{ user: User; token: string; mustChangePassword?: boolean }>,
+    api.post('/auth/login', { email, password }) as Promise<LoginResponse>,
+  /** 현재 세션을 유지한 채 비밀번호만 확인 (화면 잠금 해제용 — /auth/login 재호출은 세션을 지운다) */
+  verifyPassword: (password: string) =>
+    api.post('/auth/verify-password', { password }) as Promise<{ ok: boolean }>,
+  /** 2차 인증 2단계 — 로그인 응답과 같은 형태를 돌려준다 */
+  mfaVerify: (mfaToken: string, code: string) =>
+    api.post('/auth/mfa/verify', { mfaToken, code }) as Promise<LoginSuccess>,
+  mfaStatus: () => api.get('/auth/mfa/status') as Promise<MfaStatus>,
+  /** mfaToken이 있으면 로그인 도중(강제 등록), 없으면 로그인한 세션으로 호출 */
+  mfaSetupStart: (mfaToken?: string) =>
+    api.post('/auth/mfa/setup/start', mfaToken ? { mfaToken } : {}) as Promise<{ secret: string; otpauthUrl: string }>,
+  mfaSetupConfirm: (code: string, mfaToken?: string) =>
+    api.post('/auth/mfa/setup/confirm', mfaToken ? { code, mfaToken } : { code }) as Promise<
+      { ok?: boolean; recoveryCodes: string[] } & Partial<LoginSuccess>
+    >,
+  mfaDisable: (password: string, code: string) =>
+    api.post('/auth/mfa/disable', { password, code }) as Promise<{ ok: boolean }>,
+  mfaRegenerateRecoveryCodes: (password: string, code: string) =>
+    api.post('/auth/mfa/recovery-codes', { password, code }) as Promise<{ recoveryCodes: string[] }>,
   register: (email: string, password: string, name: string) =>
     api.post('/auth/register', { email, password, name }) as Promise<{ user: User; token: string }>,
   me: () => api.get('/auth/me') as Promise<{ user: User }>,
-  logout: () => api.post('/auth/logout', {}) as Promise<{ ok: boolean }>,
+  logout: (token: string) => api.post('/auth/logout', {}, {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  }) as Promise<{ ok: boolean }>,
 };
 
 export type BulkRegisterUserInput = {
@@ -440,6 +476,9 @@ export const usersApi = {
       name: string;
       email: string;
     }>,
+  /** 2차 인증 초기화 (관리자 전용) — 인증 앱을 잃어버린 사용자용. 대상 사용자의 세션은 모두 끊긴다. */
+  resetMfa: (id: string) =>
+    api.post(`/users/${id}/reset-mfa`, {}) as Promise<{ ok: boolean; name: string; email: string; wasEnabled: boolean }>,
   /** 삭제 시 함께 사라지는 데이터 (관리자 전용) */
   deleteImpact: (id: string) => api.get(`/users/${id}/impact`) as Promise<UserDeleteImpact>,
   /**
@@ -453,6 +492,8 @@ export const usersApi = {
       messageCount: number;
     }>,
   list: () => api.get('/users') as Promise<User[]>,
+  get: (id: string) => api.get(`/users/${encodeURIComponent(id)}`) as Promise<User>,
+  search: (query: string) => api.get(`/users?search=${encodeURIComponent(query)}`) as Promise<User[]>,
   bulkRegister: (data: { defaultPassword?: string; users: BulkRegisterUserInput[] }) =>
     api.post('/users/bulk', data) as Promise<BulkRegisterResult>,
   /** 직급은 여기서 바꿀 수 없다. 조직 마스터 값이라 관리자만 setJobTitle로 지정한다. */
@@ -560,6 +601,9 @@ export const orgApi = {
   /** 부서를 펼칠 때 그 부서(하위 부서 제외) 소속 사용자 목록을 가져온다. */
   departmentUsers: (departmentId: string) =>
     api.get(`/org/departments/${departmentId}/users`) as Promise<OrgUser[]>,
+  /** 같은 부서(직속) 안에서 임직원 순번을 한 칸 이동한다. 겸직으로만 걸린 사람은 대상이 아니다. */
+  reorderUser: (id: string, direction: 'up' | 'down') =>
+    api.put(`/org/users/${id}/order`, { direction }) as Promise<{ moved: boolean }>,
   online: () => api.get('/org/online') as Promise<{
     userIds: string[];
     presence?: Record<string, { desktop: boolean; mobile: boolean }>;
@@ -624,6 +668,50 @@ export type AnnouncementItem = {
   updatedAt: string;
 };
 
+export type FileTransferPolicy = {
+  enabled: boolean;
+  /** 파일 내려받기 허용 여부(업로드와 별개) */
+  downloadEnabled: boolean;
+  maxSizeMB: number;
+  blockedExtensions: string[];
+  allowedExtensions: string[];
+};
+export type SecurityPolicy = {
+  /** 입력이 없으면 화면을 잠그는 시간(분). 0이면 사용 안 함 */
+  screenLockMinutes: number;
+  twoFactor: 'optional' | 'required';
+  /** 동시에 열 수 있는 대화창 수. 0이면 제한 없음 */
+  maxChatWindows: number;
+  fileTransfer: FileTransferPolicy;
+  alwaysBlockedExtensions: string[];
+};
+export type SecurityPolicyPatch = {
+  screenLockMinutes?: number;
+  twoFactor?: 'optional' | 'required';
+  maxChatWindows?: number;
+  fileTransfer?: Partial<FileTransferPolicy>;
+};
+export type FileAuditEntry = {
+  id: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  roomId: string | null;
+  fileName: string;
+  fileSize: number;
+  allowed: boolean;
+  reason: string | null;
+  createdAt: string;
+};
+
+/** 그룹웨어 SSO 설정 — 켜져 있으면 그룹웨어 버튼이 1회용 토큰을 받아 `주소+path?token=`으로 연다. */
+export type GroupwareSsoSetting = { enabled: boolean; path: string };
+
+export const ssoApi = {
+  /** 로그인한 사용자 본인의 그룹웨어 SSO 1회용 토큰 발급(유효 약 60초) */
+  createToken: () => api.post('/sso/token', {}) as Promise<{ token: string; expiresIn: number }>,
+};
+
 export const appSettingsApi = {
   getExternalSite: () => api.get('/settings/external-site') as Promise<{ url: string }>,
   putExternalSite: (url: string) =>
@@ -631,7 +719,40 @@ export const appSettingsApi = {
   getMailSite: () => api.get('/settings/mail-site') as Promise<{ url: string }>,
   putMailSite: (url: string) =>
     api.put('/settings/mail-site', { url }) as Promise<{ url: string }>,
+  getGroupwareUrl: () => api.get('/settings/groupware-url') as Promise<{ url: string }>,
+  putGroupwareUrl: (url: string) =>
+    api.put('/settings/groupware-url', { url }) as Promise<{ url: string }>,
+  getGroupwareSso: () => api.get('/settings/groupware-sso') as Promise<GroupwareSsoSetting>,
+  putGroupwareSso: (enabled: boolean, path: string) =>
+    api.put('/settings/groupware-sso', { enabled, path }) as Promise<GroupwareSsoSetting>,
+  getSecurity: () => api.get('/settings/security') as Promise<SecurityPolicy>,
+  putSecurity: (patch: SecurityPolicyPatch) => api.put('/settings/security', patch) as Promise<SecurityPolicy>,
+  fileAudit: (opts: { blockedOnly?: boolean; limit?: number } = {}) =>
+    api.get(
+      `/settings/file-audit?limit=${opts.limit ?? 50}${opts.blockedOnly ? '&blockedOnly=1' : ''}`,
+    ) as Promise<FileAuditEntry[]>,
 };
+
+let securityPolicyCache: { at: number; policy: SecurityPolicy } | null = null;
+const SECURITY_POLICY_TTL_MS = 60_000;
+
+/** 보안 정책을 1분간 캐시해서 돌려준다. 실패하면 null(호출 측은 서버 검증에 맡긴다). */
+export async function getCachedSecurityPolicy(force = false): Promise<SecurityPolicy | null> {
+  if (!force && securityPolicyCache && Date.now() - securityPolicyCache.at < SECURITY_POLICY_TTL_MS) {
+    return securityPolicyCache.policy;
+  }
+  try {
+    const policy = await appSettingsApi.getSecurity();
+    securityPolicyCache = { at: Date.now(), policy };
+    return policy;
+  } catch {
+    return securityPolicyCache?.policy ?? null;
+  }
+}
+
+export function clearSecurityPolicyCache(): void {
+  securityPolicyCache = null;
+}
 
 export const announcementApi = {
   get: () => api.get('/announcement') as Promise<{
@@ -707,7 +828,12 @@ export const roomsApi = {
 };
 
 export const filesApi = {
-  upload: (roomId: string, file: File, onProgress?: (percent: number) => void, content?: string) => {
+  async upload(roomId: string, file: File, onProgress?: (percent: number) => void, content?: string) {
+    // 정책에 막힐 파일을 (수 GB여도) 끝까지 올리고 나서야 알게 되지 않도록 먼저 검사한다.
+    // 최종 강제는 서버가 하므로, 정책을 못 읽어오면 검사를 건너뛰고 서버에 맡긴다.
+    const policy = await getCachedSecurityPolicy();
+    const verdict = policy ? evaluateFilePolicy(file, policy) : null;
+    if (verdict) throw new Error(verdict);
     const formData = new FormData();
     formData.append('roomId', roomId);
     formData.append('file', file);
@@ -731,6 +857,9 @@ export const filesApi = {
     if (window.electronAPI?.downloadFile) {
       const result = await window.electronAPI.downloadFile(messageId, filename ?? undefined);
       if (result?.ok || result?.error === 'CANCELED') return;
+      if (result?.error === 'FILE_DOWNLOAD_DISABLED') {
+        throw new Error('파일 내려받기가 관리자에 의해 제한되어 있습니다');
+      }
       throw new Error('다운로드에 실패했습니다.');
     }
     // 웹(비 Electron) 폴백 — 브라우저 다운로드는 blob 경유가 불가피
@@ -872,14 +1001,17 @@ export type MemoItem = {
   recipients: MemoRecipient[];
   readAt?: string | null;
   recipientId?: string | null;
+  scheduledAt?: string | null;
+  favorite?: boolean;
 };
 
 export const memosApi = {
   inbox: () => api.get('/memos/inbox') as Promise<MemoItem[]>,
   sent: () => api.get('/memos/sent') as Promise<MemoItem[]>,
   get: (id: string) => api.get(`/memos/${id}`) as Promise<MemoItem>,
-  send: (data: { recipientIds: string[]; subject: string; body: string }) =>
+  send: (data: { recipientIds: string[]; subject: string; body: string; scheduledAt?: string }) =>
     api.post('/memos', data) as Promise<MemoItem>,
+  setFavorite: (id: string, favorite: boolean) => api.put(`/memos/${id}/favorite`, { favorite }) as Promise<{ ok: boolean }>,
   markRead: (id: string) => api.post(`/memos/${id}/read`, {}) as Promise<{ ok: boolean }>,
   remove: (id: string) => api.delete(`/memos/${id}`) as Promise<{ ok: boolean }>,
   unreadCount: () => api.get('/memos/unread-count') as Promise<{ count: number }>,

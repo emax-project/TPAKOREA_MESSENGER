@@ -1,8 +1,12 @@
+import type { VirtuosoHandle } from 'react-virtuoso';
+import ToastProvider from '../components/ui/ToastProvider';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { Socket } from 'socket.io-client';
 import { useAuthStore, useThemeStore, useToastStore } from '../store';
+import { useMessageSender } from './chat-window/hooks/useMessageSender';
+import PendingSendBar from './chat-window/components/PendingSendBar';
 import { roomsApi, filesApi, eventsApi, pollsApi, projectsApi, type Room, type Message } from '../api';
 import FileUploadButton from '../components/FileUploadButton';
 import InviteModal from '../components/InviteModal';
@@ -35,7 +39,6 @@ import BoardMessageList from './chat-window/components/BoardMessageList';
 import ThreadPanel from './chat-window/components/ThreadPanel';
 
 const MAX_DROP_SIZE = 2 * 1024 * 1024 * 1024;
-const SCROLL_BOTTOM_THRESHOLD = 80;
 
 
 type ChatWindowProps = { embedded?: boolean; onOpenInNewWindow?: () => void };
@@ -90,27 +93,15 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
   // 임베디드(모바일 셸)이거나 좁은 창에서는 컴팩트 헤더
   const isCompactHeader = embedded || viewportWidth < 980;
   const socketRef = useRef<Socket | null>(null);
-  // 보드뷰 전용 — 챗뷰는 ChatBubbleList 내부의 Virtuoso가 스크롤을 직접 관리한다
-  const messagesScrollRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const topSentinelRef = useRef<HTMLDivElement>(null);
-  const initialScrollDoneRef = useRef(false);
-  const prevScrollHeightRef = useRef(0);
-  const prevPageCountRef = useRef(0);
-  const prevMsgCountRef = useRef(0);
+  const { pending: pendingSends, send: sendOutgoing, retry: retryOutgoing, dismiss: dismissOutgoing } = useMessageSender(socketRef);
+  const boardListRef = useRef<VirtuosoHandle>(null);
   const chatBubbleListRef = useRef<ChatBubbleListHandle>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const boardEditorRef = useRef<{ focus: () => void } | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const checkAtBottom = () => {
-    const el = messagesScrollRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD;
-    setShowScrollToBottom(!atBottom);
-  };
   const scrollToBottom = () => {
     if (isBoardView) {
-      messagesScrollRef.current?.scrollTo({ top: messagesScrollRef.current.scrollHeight, behavior: 'auto' });
+      boardListRef.current?.scrollToIndex({ index: 'LAST', align: 'end' });
     } else {
       chatBubbleListRef.current?.scrollToBottom();
     }
@@ -185,9 +176,6 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
   );
 
   const handleLoadMore = useCallback(() => {
-    if (messagesScrollRef.current) {
-      prevScrollHeightRef.current = messagesScrollRef.current.scrollHeight;
-    }
     fetchNextPage();
   }, [fetchNextPage]);
 
@@ -197,40 +185,6 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
       queryClient.setQueryData(['rooms', roomId], { ...room, viewMode: 'board' as const });
     }
   }, [roomId, room, viewModeFromListNow, queryClient]);
-
-  useEffect(() => {
-    const t = setTimeout(checkAtBottom, 100);
-    return () => clearTimeout(t);
-  }, [messages.length, roomId]);
-
-  // 스크롤 상단 sentinel - 이전 메시지 로드
-  useEffect(() => {
-    const sentinel = topSentinelRef.current;
-    if (!sentinel) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
-          handleLoadMore();
-        }
-      },
-      { threshold: 0.1 }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, handleLoadMore]);
-
-  // 이전 페이지 로드 완료 시 스크롤 위치 보정
-  useEffect(() => {
-    const pageCount = messagesInfinite?.pages?.length ?? 0;
-    if (pageCount > prevPageCountRef.current && prevPageCountRef.current > 0) {
-      const el = messagesScrollRef.current;
-      if (el) {
-        const diff = el.scrollHeight - prevScrollHeightRef.current;
-        el.scrollTop += diff;
-      }
-    }
-    prevPageCountRef.current = pageCount;
-  }, [messagesInfinite?.pages.length]);
 
   // 채팅창이 열리면 입력 칸에 포커스
   useEffect(() => {
@@ -253,11 +207,6 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
   }, [roomId, queryClient, myId]);
   useActiveChatPresence(roomId);
 
-  // roomId 변경 시 초기 스크롤 플래그 리셋
-  useEffect(() => {
-    initialScrollDoneRef.current = false;
-  }, [roomId]);
-
   // 첫 번째 안 읽은 메시지 ID (useEffect보다 먼저 선언 필요)
   const displayMessagesForScroll = useMemo(() => [...messages].reverse(), [messages]);
   const firstUnreadMessageId = useMemo(() => {
@@ -267,41 +216,6 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
     if (unreadCount <= 0 || lastReadAt <= 0) return null;
     return displayMessagesForScroll.find((m) => m.senderId !== myId && new Date(m.createdAt).getTime() > lastReadAt)?.id ?? null;
   }, [room, myId, displayMessagesForScroll]);
-
-  // 채팅 열릴 때: 다읽음→맨끝, 안읽음→첫 안읽은 메시지로 스크롤
-  useEffect(() => {
-    const el = messagesScrollRef.current;
-    if (!el || !room) return;
-    const curCount = messages.length;
-    const prevCount = prevMsgCountRef.current;
-    prevMsgCountRef.current = curCount;
-
-    // 이전 메시지 로드(페이지 추가)일 때는 스크롤 금지 - 위 useEffect에서 보정함
-    const pagesLen = messagesInfinite?.pages?.length ?? 0;
-    if (pagesLen > 1 && curCount > prevCount && curCount - prevCount >= 10) return;
-
-    // 초기 로드 시에만 진입 스크롤 (room + messages 준비 후) — 보드뷰 전용
-    // (챗뷰는 ChatBubbleList의 Virtuoso가 initialTopMostItemIndex로 안읽음/맨끝 위치를 직접 처리)
-    if (curCount > 0 && !initialScrollDoneRef.current) {
-      initialScrollDoneRef.current = true;
-      const run = () => { el.scrollTop = el.scrollHeight; };
-      requestAnimationFrame(run);
-      const t = setTimeout(run, 250);
-      return () => clearTimeout(t);
-    }
-
-    // 새 메시지 추가 시에만 스크롤 (반응/수정 등 기존 메시지 업데이트는 제외)
-    if (curCount <= prevCount) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD;
-    const newestIsMine = messages[0]?.senderId === myId;
-    const shouldScroll = (atBottom || newestIsMine) && prevCount > 0;
-    if (shouldScroll) {
-      const run = () => { el.scrollTop = el.scrollHeight; };
-      requestAnimationFrame(run);
-      const t = setTimeout(run, 150);
-      return () => clearTimeout(t);
-    }
-  }, [messages.length, room, firstUnreadMessageId, messages, myId, messagesInfinite?.pages?.length]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -331,6 +245,7 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
       setFileUploading(true);
       // 파일별로 독립적으로 시도 — 하나가 실패해도 나머지는 계속 전송한다
       const failed: File[] = [];
+      const failureReasons: string[] = [];
       let contentSent = false;
       try {
         for (let i = 0; i < pendingFiles.length; i++) {
@@ -341,7 +256,8 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
             }, content);
             if (content) contentSent = true;
           } catch (err) {
-            console.error('[sendMessage] 파일 전송 실패:', pendingFiles[i].name, err);
+            const reason = err instanceof Error ? err.message : '전송에 실패했습니다.';
+            failureReasons.push(`${pendingFiles[i].name} · ${reason}`);
             failed.push(pendingFiles[i]);
           }
         }
@@ -352,7 +268,7 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
       // 실패한 파일만 입력창에 남겨서 다시 보내기로 재시도할 수 있게 한다
       setPendingFiles(failed);
       if (failed.length > 0) {
-        showToast(`${failed.map((f) => f.name).join(', ')} 전송 실패 — 다시 보내기를 눌러 재시도해 주세요`, 'error');
+        showToast(failureReasons.join(' / '), 'error');
       }
       if (contentSent) setInput('');
       setReplyTo(null);
@@ -361,9 +277,8 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
       return;
     }
 
-    // 텍스트만 전송 (socketRef 사용 - stale closure 방지)
-    const s = socketRef.current;
-    if (!text || !roomId || !s) return;
+    // 텍스트만 전송 — 서버 확인(ack)을 기다리고 끊기면 같은 키로 자동 재전송한다
+    if (!text || !roomId) return;
     const payload: { roomId: string; content: string; replyToId?: string; context?: { filePath?: string; line?: number; branch?: string } } = {
       roomId,
       content: text,
@@ -376,7 +291,7 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
         branch: messageContext.branch || undefined,
       };
     }
-    s.emit('message', payload);
+    sendOutgoing(payload);
     if (myId) queryClient.invalidateQueries({ queryKey: ['rooms', myId], exact: true });
     setInput('');
     setReplyTo(null);
@@ -637,6 +552,7 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
           50% { opacity: 0.7; }
         }
       `}</style>
+      {!embedded && <ToastProvider />}
       {!embedded && hasElectron && isWinElectron() && <TitleBar title={room.name} isDark={isDark} />}
       <div className="relative flex flex-1 min-h-0 min-w-0 overflow-hidden">
         <div
@@ -748,7 +664,10 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
             onClose={() => setInviteOpen(false)}
             onInvited={(newRoomId: string) => {
               queryClient.refetchQueries({ queryKey: ['rooms'] });
-              if (window.electronAPI?.openChatWindow) {
+              if (embedded) {
+                // 메인 창 안에서 보던 대화는 새 방도 메인 창 안에서 연다
+                navigate(`/room/${newRoomId}`);
+              } else if (window.electronAPI?.openChatWindow) {
                 window.electronAPI.openChatWindow(newRoomId);
               } else {
                 window.open(`${window.location.origin}/chat/${newRoomId}`, '_blank', 'width=480,height=680');
@@ -773,18 +692,15 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
 
         <div className="relative flex-1 min-h-0 flex flex-col">
           {isBoardView ? (
-            <div
-              ref={messagesScrollRef}
-              onScroll={checkAtBottom}
-              className={cn('flex-1 overflow-x-hidden overflow-y-auto py-4 px-5 flex flex-col gap-2.5', isDark ? 'bg-slate-900' : 'bg-white')}
-            >
-              <div ref={topSentinelRef} style={{ height: 1 }} />
-              {isFetchingNextPage && (
-                <div style={{ textAlign: 'center', padding: '8px 0', fontSize: 13, color: isDark ? '#64748b' : '#94a3b8' }}>
-                  이전 메시지 불러오는 중...
-                </div>
-              )}
+            <div className={cn('flex-1 min-h-0 py-4', isDark ? 'bg-slate-900' : 'bg-white')}>
               <BoardMessageList
+                key={roomId}
+                listRef={boardListRef}
+                pageCount={messagesInfinite?.pages.length ?? 0}
+                hasNextPage={!!hasNextPage}
+                isFetchingNextPage={isFetchingNextPage}
+                onLoadMore={handleLoadMore}
+                onAtBottomStateChange={(atBottom) => setShowScrollToBottom(!atBottom)}
                 rootPosts={rootPosts}
                 repliesMap={repliesMap}
                 isDark={isDark}
@@ -795,10 +711,9 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
                 handleReaction={handleReaction}
                 boardCommentInputs={boardCommentInputs}
                 setBoardCommentInputs={setBoardCommentInputs}
-                socketRef={socketRef}
+                onSendMessage={sendOutgoing}
                 roomId={roomId}
               />
-              <div ref={messagesEndRef} />
             </div>
           ) : (
             /* ===== 채팅뷰: 기존 말풍선, 가상 스크롤(Virtuoso)로 렌더링 ===== */
@@ -945,8 +860,8 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
                       role="button"
                       tabIndex={0}
                       onClick={() => {
-                        if (!socketRef.current || !roomId) return;
-                        socketRef.current.emit('message', { roomId, content: '', sharedEvent: { title: ev.title, startAt: ev.startAt, endAt: ev.endAt, description: ev.description ?? '' } });
+                        if (!roomId) return;
+                        sendOutgoing({ roomId, content: '', sharedEvent: { title: ev.title, startAt: ev.startAt, endAt: ev.endAt, description: ev.description ?? '' } });
                         if (myId) queryClient.invalidateQueries({ queryKey: ['rooms', myId], exact: true });
                         setShareEventOpen(false);
                       }}
@@ -988,6 +903,9 @@ export default function ChatWindow({ embedded, onOpenInNewWindow }: ChatWindowPr
             <MentionPopup members={members} query={mentionQuery} onSelect={handleMentionSelect} />
           )}
         </div>
+
+        {/* 서버 확인을 못 받았거나 실패한 메시지 */}
+        <PendingSendBar items={pendingSends} isDark={isDark} onRetry={retryOutgoing} onDismiss={dismissOutgoing} />
 
         {/* 첨부 파일 프리뷰 바 */}
         {pendingFiles.length > 0 && (

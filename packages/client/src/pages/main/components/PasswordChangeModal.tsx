@@ -75,6 +75,7 @@ export default function PasswordChangeModal({ isDark, onClose, onSuccess, forced
     setSaving(true);
     try {
       await authApi.changePassword(current, next);
+      // LDAP 계정은 그룹웨어와 공유되므로 자동 로그인용 비밀번호도 새 것으로 갱신
       setDone(true);
       onSuccess?.();
       if (!forced) setTimeout(onClose, 1200);

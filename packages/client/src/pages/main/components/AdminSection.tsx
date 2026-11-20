@@ -7,6 +7,7 @@ import { useToastStore } from '../../../store';
 import BulkUserRegisterSection from './BulkUserRegisterSection';
 import OrgManageSection from './OrgManageSection';
 import UserManageSection from './UserManageSection';
+import SecurityPolicySection from './SecurityPolicySection';
 
 type Props = {
   isDark: boolean;
@@ -111,6 +112,93 @@ function SidebarLinkSettings({ isDark, queryKey, title, description, placeholder
   );
 }
 
+/** 그룹웨어 SSO(1회용 토큰) 설정 — 켜면 그룹웨어·메일 버튼이 토큰을 받아 `그룹웨어 주소 + 경로`로 연다.
+ *  그룹웨어 서버가 토큰 검증 API를 구현하기 전에는 꺼 둔다(꺼져 있으면 기존처럼 주소만 열림). */
+function GroupwareSsoField({ isDark }: { isDark: boolean }) {
+  const accent = useAccentStyles(isDark);
+  const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
+  const { data } = useQuery({ queryKey: ['settings', 'groupware-sso'], queryFn: appSettingsApi.getGroupwareSso });
+  const [enabled, setEnabled] = useState(false);
+  const [path, setPath] = useState('/sso');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (data) {
+      setEnabled(data.enabled);
+      setPath(data.path);
+    }
+  }, [data]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const saved = await appSettingsApi.putGroupwareSso(enabled, path);
+      setEnabled(saved.enabled);
+      setPath(saved.path);
+      await queryClient.invalidateQueries({ queryKey: ['settings', 'groupware-sso'] });
+      showToast(saved.enabled ? '그룹웨어 SSO를 켰습니다' : '그룹웨어 SSO를 껐습니다', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '저장에 실패했습니다', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const muted = isDark ? 'text-slate-400' : 'text-slate-500';
+  return (
+    <div className={cn('flex flex-col gap-2 rounded-lg px-3 py-2.5', isDark ? 'bg-slate-800' : 'bg-white')}>
+      <div>
+        <div className={cn('text-[13px] font-semibold', isDark ? 'text-slate-200' : 'text-slate-800')}>
+          그룹웨어 SSO (1회용 토큰)
+        </div>
+        <p className={cn('mt-1 mb-0 text-xs leading-relaxed', muted)}>
+          켜면 그룹웨어·메일 버튼이 1회용 토큰을 받아 그룹웨어 주소 뒤에 아래 경로를 붙여 엽니다. 그룹웨어가 토큰 검증을 지원할 때만 켜세요.
+          꺼져 있거나 토큰을 받지 못하면 기존처럼 주소만 열립니다.
+        </p>
+      </div>
+      <label className={cn('flex items-center gap-2 text-[13px] cursor-pointer', isDark ? 'text-slate-200' : 'text-slate-800')}>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        SSO 사용
+      </label>
+      <div className="flex gap-2 items-center">
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void save(); }}
+          placeholder="/sso"
+          aria-label="그룹웨어 SSO 경로"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: `1px solid ${isDark ? '#475569' : '#e2e8f0'}`,
+            background: isDark ? '#1e293b' : '#fff',
+            color: isDark ? '#e2e8f0' : '#333',
+            fontSize: 13,
+            boxSizing: 'border-box',
+            ...accent.inputStyle,
+          }}
+        />
+        <button
+          type="button"
+          style={accent.primaryStyle}
+          disabled={saving}
+          onClick={() => { void save(); }}
+          className={cn(
+            'shrink-0 px-3.5 py-2 border-none rounded-lg bg-gradient-to-br from-brand-light to-brand-dark text-white text-[13px] font-semibold cursor-pointer',
+            saving && 'opacity-70 cursor-wait',
+          )}
+        >
+          {saving ? '저장 중' : '저장'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** 관리자 전용 도구 묶음. 세로로 쌓지 않고 탭으로 나눠 설정 화면이 길어지지 않게 한다. */
 function AdminSection({ isDark, isNarrowLayout = false, currentUserId }: Props) {
   const accent = useAccentStyles(isDark);
@@ -148,6 +236,18 @@ function AdminSection({ isDark, isNarrowLayout = false, currentUserId }: Props) 
         load={appSettingsApi.getMailSite}
         store={appSettingsApi.putMailSite}
       />
+      <SidebarLinkSettings
+        isDark={isDark}
+        queryKey="groupware-url"
+        title="그룹웨어"
+        description="왼쪽 사이드바 그룹웨어 버튼과 PC 메신저 홈 버튼이 이 주소를 엽니다. 비워 두면 버튼을 눌러도 동작하지 않습니다."
+        placeholder="https://gw.example.com"
+        load={appSettingsApi.getGroupwareUrl}
+        store={appSettingsApi.putGroupwareUrl}
+      />
+      <GroupwareSsoField isDark={isDark} />
+
+      <SecurityPolicySection isDark={isDark} />
 
       <div
         role="tablist"

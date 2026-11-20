@@ -6,7 +6,7 @@ import type { UpdateStatus } from '../hooks/useUpdateManager';
 import type { ScheduleCreateOptions } from '../hooks/useMainContentActions';
 import ChatWindow from '../../ChatWindow';
 import type { MentionItem } from './MentionPanel';
-import type { MemoItem } from './MemoPanel';
+import type { MemoItem, MemoDetailActions } from './MemoPanel';
 import type { RoomSectionsProps } from './RoomSections';
 
 const NotificationPanel = lazy(() => import('./NotificationPanel'));
@@ -54,10 +54,12 @@ type RightContentRouterProps = {
     onCancelEditAnnouncement: () => void;
     onSaveAnnouncement: () => void | Promise<void>;
   };
-  memoProps: {
+  memoProps: MemoDetailActions & {
     inbox: MemoItem[];
     sent: MemoItem[];
     onOpenCompose: () => void;
+    onRefresh: () => void;
+    onFavorite: (memo: MemoItem) => void | Promise<void>;
     onMarkRead: (memo: MemoItem) => void | Promise<void>;
     onDelete: (memo: MemoItem) => void | Promise<void>;
   };
@@ -120,9 +122,11 @@ type RightContentRouterProps = {
   settingsProps: {
     notificationsSnoozedUntil: number;
     notificationSoundEnabled: boolean;
+    notificationPopupEnabled: boolean;
     snoozeNotifications: (minutes: number) => void;
     clearSnooze: () => void;
     toggleNotificationSound: () => void;
+    toggleNotificationPopup: () => void;
     toggleDark: () => void;
     accentTheme: import('../../../utils/orgTheme').OrgThemeId;
     onAccentThemeChange: (id: import('../../../utils/orgTheme').OrgThemeId) => void;
@@ -273,6 +277,11 @@ function RightContentRouter({
             sent={memoProps.sent}
             panelWrapStyle={panelWrapStyle}
             onOpenCompose={memoProps.onOpenCompose}
+            onRefresh={memoProps.onRefresh}
+            onFavorite={memoProps.onFavorite}
+            onComposeFromMemo={memoProps.onComposeFromMemo}
+            onChat={memoProps.onChat}
+            onProfile={memoProps.onProfile}
             onMarkRead={memoProps.onMarkRead}
             onDelete={memoProps.onDelete}
           />
@@ -320,9 +329,11 @@ function RightContentRouter({
             user={settingsProps.user}
             notificationsSnoozedUntil={settingsProps.notificationsSnoozedUntil}
             notificationSoundEnabled={settingsProps.notificationSoundEnabled}
+            notificationPopupEnabled={settingsProps.notificationPopupEnabled}
             snoozeNotifications={settingsProps.snoozeNotifications}
             clearSnooze={settingsProps.clearSnooze}
             toggleNotificationSound={settingsProps.toggleNotificationSound}
+            toggleNotificationPopup={settingsProps.toggleNotificationPopup}
             toggleDark={settingsProps.toggleDark}
             accentTheme={settingsProps.accentTheme}
             onAccentThemeChange={settingsProps.onAccentThemeChange}

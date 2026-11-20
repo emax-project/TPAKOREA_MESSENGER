@@ -3,7 +3,9 @@ import path from 'path';
 import fs from 'fs';
 import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
-import { upload, UPLOAD_DIR } from '../upload.js';
+import { policyUpload, recordFileAudit, UPLOAD_DIR } from '../upload.js';
+import { fileUploadLimiter } from '../lib/authRateLimit.js';
+import { getSecurityPolicy } from '../lib/securityPolicy.js';
 
 export const filesRouter = Router();
 
@@ -19,11 +21,11 @@ function toJson(obj) {
 const FILE_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000; // 10분
 
 // POST /files/upload — Upload a file and create a file message
-filesRouter.post('/upload', (req, res, next) => {
+filesRouter.post('/upload', fileUploadLimiter, (req, res, next) => {
   req.setTimeout(FILE_UPLOAD_TIMEOUT_MS);
   res.setTimeout(FILE_UPLOAD_TIMEOUT_MS);
   next();
-}, upload.single('file'), async (req, res) => {
+}, policyUpload('file'), async (req, res) => {
   try {
     const { roomId } = req.body;
     if (!roomId) {
@@ -74,6 +76,14 @@ filesRouter.post('/upload', (req, res, next) => {
       data: { lastReadAt: now },
     });
 
+    void recordFileAudit({
+      userId: req.userId,
+      roomId,
+      fileName: originalName,
+      fileSize: req.file.size,
+      allowed: true,
+    });
+
     const jsonMessage = toJson(message);
     const io = req.app.get('io');
     if (io) {
@@ -110,6 +120,19 @@ filesRouter.get('/download/:messageId', async (req, res) => {
 
     if (message.fileExpiresAt && new Date() > message.fileExpiresAt) {
       return res.status(410).json({ error: 'File has expired' });
+    }
+
+    // 관리자가 내려받기를 막아 둔 경우(앱 우회 방지를 위해 서버에서 강제)
+    if (!(await getSecurityPolicy()).fileTransfer.downloadEnabled) {
+      void recordFileAudit({
+        userId: req.userId,
+        roomId: message.roomId,
+        fileName: message.fileName || path.basename(message.fileUrl),
+        fileSize: message.fileSize ?? 0,
+        allowed: false,
+        reason: 'FILE_DOWNLOAD_DISABLED',
+      });
+      return res.status(403).json({ error: '파일 내려받기가 관리자에 의해 제한되어 있습니다', code: 'FILE_DOWNLOAD_DISABLED' });
     }
 
     const filename = path.basename(message.fileUrl);

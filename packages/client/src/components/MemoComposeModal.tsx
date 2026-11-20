@@ -1,27 +1,35 @@
+import MemoSchedulePicker from './MemoSchedulePicker';
 import { memo, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { orgApi, memosApi, type OrgUser } from '../api';
+import { orgApi, memosApi, usersApi, type OrgUser } from '../api';
 import { useAuthStore, useThemeStore, useToastStore } from '../store';
 import UIButton from './ui/UIButton';
 import UIModal from './ui/UIModal';
 import ModalFooter from './ui/ModalFooter';
+import UIChevron from './ui/UIChevron';
 import { cn } from '../utils/cn';
-import { companyUsers } from '../utils/orgTree';
+import { companyUsers, departmentUsers, flattenDepartments } from '../utils/orgTree';
 
 type MemoComposeModalProps = {
   onClose: () => void;
   onSent?: () => void;
   initialRecipientIds?: string[];
+  initialRecipients?: OrgUser[];
+  initialBody?: string;
 };
 
-function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoComposeModalProps) {
+function MemoComposeModal({ onClose, onSent, initialRecipientIds = [], initialRecipients = [], initialBody = '' }: MemoComposeModalProps) {
   const myId = useAuthStore((s) => s.user?.id);
   const isDark = useThemeStore((s) => s.isDark);
   const showToast = useToastStore((s) => s.show);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(initialRecipientIds));
+  const [selected, setSelected] = useState<Set<string>>(() => new Set([...initialRecipientIds, ...initialRecipients.map((user) => user.id)]));
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedProfiles, setSelectedProfiles] = useState<Record<string, OrgUser>>(() => Object.fromEntries(initialRecipients.map((user) => [user.id, user])));
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [body, setBody] = useState('');
+  const [orgPickerOpen, setOrgPickerOpen] = useState(false);
+  const [collapsedDepartments, setCollapsedDepartments] = useState<Set<string>>(new Set());
+  const [body, setBody] = useState(initialBody);
+  const [sendAt, setSendAt] = useState('');
   const [loading, setLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -40,20 +48,30 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
     return users;
   }, [orgTree, myId]);
 
+  const searchLower = searchQuery.trim().toLowerCase();
+  const { data: directoryMatches, isFetching: isSearching } = useQuery({
+    queryKey: ['users', 'memo-recipients', searchLower],
+    queryFn: () => usersApi.search(searchLower),
+    enabled: pickerOpen && !!searchLower,
+  });
+
   const usersById = useMemo(() => {
-    const map = new Map<string, OrgUser>();
+    const map = new Map<string, OrgUser>(Object.entries(selectedProfiles));
     allUsers.forEach((u) => map.set(u.id, u));
     return map;
-  }, [allUsers]);
+  }, [allUsers, selectedProfiles]);
 
   const selectedUsers = useMemo(
     () => [...selected].map((id) => usersById.get(id)).filter(Boolean) as OrgUser[],
     [selected, usersById],
   );
 
-  const searchLower = searchQuery.trim().toLowerCase();
   const suggestions = useMemo(() => {
-    return allUsers
+    const candidates = new Map(allUsers.map((user) => [user.id, user]));
+    for (const user of directoryMatches ?? []) {
+      if (user.id !== myId && !candidates.has(user.id)) candidates.set(user.id, user);
+    }
+    return [...candidates.values()]
       .filter((u) => !selected.has(u.id))
       .filter((u) => {
         if (!searchLower) return true;
@@ -63,10 +81,11 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
         );
       })
       .slice(0, 8);
-  }, [allUsers, selected, searchLower]);
+  }, [allUsers, directoryMatches, myId, selected, searchLower]);
 
-  const addUser = (userId: string) => {
-    setSelected((prev) => new Set(prev).add(userId));
+  const addUser = (user: OrgUser) => {
+    setSelectedProfiles((prev) => ({ ...prev, [user.id]: user }));
+    setSelected((prev) => new Set(prev).add(user.id));
     setSearchQuery('');
     searchInputRef.current?.focus();
   };
@@ -75,6 +94,35 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
     setSelected((prev) => {
       const next = new Set(prev);
       next.delete(userId);
+      return next;
+    });
+  };
+
+  const toggleDepartmentOpen = (key: string) => {
+    setCollapsedDepartments((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  /** 부서 체크박스: 부서원 전체를 한 번에 추가/제거(이미 전원 선택돼 있으면 해제, 아니면 전원 추가) */
+  const toggleDepartmentSelect = (userIds: string[]) => {
+    if (userIds.length === 0) return;
+    const allSelected = userIds.every((id) => selected.has(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      userIds.forEach((id) => (allSelected ? next.delete(id) : next.add(id)));
+      return next;
+    });
+  };
+
+  const toggleOrgUser = (userId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
       return next;
     });
   };
@@ -91,14 +139,20 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
     }
     // 제목 입력란을 없앤 대신, 쪽지함 목록에 쓸 제목을 본문 첫 줄에서 자동으로 뽑는다.
     const autoSubject = trimmedBody.split('\n')[0].slice(0, 60) || '(제목 없음)';
+    const scheduled = sendAt ? new Date(sendAt) : null;
+    if (scheduled && (!Number.isFinite(scheduled.getTime()) || scheduled <= new Date())) {
+      showToast('예약 시간을 미래로 설정해 주세요.', 'error');
+      return;
+    }
     setLoading(true);
     try {
       await memosApi.send({
         recipientIds: [...selected],
         subject: autoSubject,
         body: trimmedBody,
+        scheduledAt: scheduled?.toISOString(),
       });
-      showToast('쪽지를 보냈습니다.', 'success');
+      showToast(scheduled ? '쪽지 발송을 예약했습니다.' : '쪽지를 보냈습니다.', 'success');
       onSent?.();
       onClose();
     } catch (err) {
@@ -114,11 +168,34 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
   };
 
   return (
-    <UIModal onClose={onClose} title="쪽지 쓰기" width={520} overlayPosition="absolute">
+    <UIModal
+      onClose={onClose}
+      title="쪽지 쓰기"
+      width={orgPickerOpen ? 720 : 520}
+      overlayPosition="absolute"
+      footer={(
+        <ModalFooter marginTop={0}>
+          <UIButton variant="secondary" onClick={onClose} disabled={loading}>취소</UIButton>
+          <UIButton onClick={() => void handleSend()} disabled={loading}>{loading ? '전송 중...' : sendAt ? '예약하기' : '보내기'}</UIButton>
+        </ModalFooter>
+      )}
+    >
       <div className="flex flex-col gap-3">
         <div>
-          <div className={cn('mb-1.5 text-xs font-semibold', isDark ? 'text-slate-300' : 'text-slate-600')}>
-            받는 사람
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <div className={cn('text-xs font-semibold', isDark ? 'text-slate-300' : 'text-slate-600')}>
+              받는 사람
+            </div>
+            <button
+              type="button"
+              onClick={() => setOrgPickerOpen((v) => !v)}
+              className={cn(
+                'border-none bg-transparent p-0 text-xs font-semibold cursor-pointer',
+                isDark ? 'text-brand-light' : 'text-brand-dark',
+              )}
+            >
+              {orgPickerOpen ? '조직도 닫기' : '조직도에서 선택'}
+            </button>
           </div>
           <div
             className={cn(
@@ -174,7 +251,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                   }
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    if (suggestions[0]) addUser(suggestions[0].id);
+                    if (suggestions[0]) addUser(suggestions[0]);
                   }
                   if (e.key === 'Escape') {
                     setPickerOpen(false);
@@ -203,7 +280,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                   </div>
                 ) : suggestions.length === 0 ? (
                   <div className={cn('px-3 py-3 text-sm', isDark ? 'text-slate-400' : 'text-slate-500')}>
-                    {searchLower ? '검색 결과가 없습니다' : '추가할 사람이 없습니다'}
+                    {isSearching ? '검색 중...' : searchLower ? '검색 결과가 없습니다' : '추가할 사람이 없습니다'}
                   </div>
                 ) : (
                   suggestions.map((u) => (
@@ -211,7 +288,7 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
                       key={u.id}
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => addUser(u.id)}
+                      onClick={() => addUser(u)}
                       className={cn(
                         'flex w-full items-center gap-2 border-none bg-transparent px-3 py-2 text-left cursor-pointer',
                         isDark ? 'hover:bg-slate-700' : 'hover:bg-slate-50',
@@ -246,6 +323,105 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
               {selectedUsers.length}명 선택됨
             </div>
           )}
+
+          {orgPickerOpen && (
+            <div
+              className={cn(
+                'mt-2 max-h-[280px] overflow-auto rounded-xl border px-2.5 py-2',
+                isDark ? 'border-slate-600 bg-slate-950' : 'border-slate-200 bg-slate-50',
+              )}
+            >
+              {orgLoading ? (
+                <div className={cn('px-1 py-2 text-xs', isDark ? 'text-slate-400' : 'text-slate-500')}>로딩 중...</div>
+              ) : (Array.isArray(orgTree) ? orgTree : []).length === 0 ? (
+                <div className={cn('px-1 py-2 text-xs', isDark ? 'text-slate-400' : 'text-slate-500')}>조직도를 불러올 수 없습니다.</div>
+              ) : (
+                (Array.isArray(orgTree) ? orgTree : []).map((company) => {
+                  const recipientIds = (users: ReturnType<typeof companyUsers>) =>
+                    [...new Set(users.filter((user) => user.id !== myId).map((user) => user.id))];
+                  const companyIds = recipientIds(companyUsers(company));
+                  if (companyIds.length === 0) return null;
+                  const depts = flattenDepartments(company.departments ?? []);
+                  const companyChecked = companyIds.every((id) => selected.has(id));
+                  return (
+                    <div key={company.id} className="mb-2">
+                      <label className={cn('flex items-center gap-1.5 px-1 py-1 text-[11px] font-bold', isDark ? 'text-slate-400' : 'text-slate-500')}>
+                        <input
+                          type="checkbox"
+                          checked={companyChecked}
+                          ref={(el) => {
+                            if (el) el.indeterminate = !companyChecked && companyIds.some((id) => selected.has(id));
+                          }}
+                          onChange={() => toggleDepartmentSelect(companyIds)}
+                        />
+                        {company.name}
+                      </label>
+                      {depts.map((dept) => {
+                        const deptUserIds = recipientIds(departmentUsers(dept));
+                        if (deptUserIds.length === 0) return null;
+                        const deptAllChecked = deptUserIds.every((id) => selected.has(id));
+                        const deptSomeChecked = deptUserIds.some((id) => selected.has(id));
+                        const deptKey = `${company.id}:${dept.id}`;
+                        const deptOpen = !collapsedDepartments.has(deptKey);
+                        return (
+                          <div key={dept.id} className="ml-1 mb-1">
+                            <div className="flex items-center gap-1.5 py-1">
+                              <input
+                                type="checkbox"
+                                aria-label={dept.name}
+                                checked={deptAllChecked}
+                                ref={(el) => {
+                                  if (el) el.indeterminate = !deptAllChecked && deptSomeChecked;
+                                }}
+                                onChange={() => toggleDepartmentSelect(deptUserIds)}
+                                className="h-3.5 w-3.5 shrink-0 cursor-pointer"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => toggleDepartmentOpen(deptKey)}
+                                className="flex min-w-0 flex-1 cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-left"
+                              >
+                                <span className={cn('inline-flex h-4 w-4 shrink-0 items-center justify-center', isDark ? 'text-slate-500' : 'text-slate-400')}>
+                                  <UIChevron open={deptOpen} />
+                                </span>
+                                <span className={cn('truncate text-[13px] font-medium', isDark ? 'text-slate-200' : 'text-slate-700')}>
+                                  {dept.name}
+                                </span>
+                              </button>
+                              <span className={cn('shrink-0 text-[11px]', isDark ? 'text-slate-500' : 'text-slate-400')}>
+                                {deptUserIds.length}명
+                              </span>
+                            </div>
+                            {deptOpen && (
+                              <ul className="m-0 list-none py-0 pl-6">
+                                {(dept.users ?? [])
+                                  .filter((u) => String(u.id) !== String(myId))
+                                  .map((u) => (
+                                    <li key={u.id}>
+                                      <label className="flex cursor-pointer items-center gap-1.5 py-1">
+                                        <input
+                                          type="checkbox"
+                                          checked={selected.has(u.id)}
+                                          onChange={() => toggleOrgUser(u.id)}
+                                          className="h-3.5 w-3.5 shrink-0 cursor-pointer"
+                                        />
+                                        <span className={cn('truncate text-[13px]', isDark ? 'text-slate-200' : 'text-slate-700')}>
+                                          {u.name}
+                                        </span>
+                                      </label>
+                                    </li>
+                                  ))}
+                              </ul>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
 
         <div>
@@ -256,17 +432,13 @@ function MemoComposeModal({ onClose, onSent, initialRecipientIds = [] }: MemoCom
             placeholder="내용을 입력하세요"
             rows={8}
             className={cn(
-              'w-full rounded-xl border px-3 py-2 text-sm outline-none resize-y min-h-[160px] font-inherit',
+              'block w-full rounded-xl border px-3 py-2 text-sm outline-none resize-y min-h-[160px] font-inherit',
               isDark ? 'border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500' : 'border-slate-200 bg-white text-slate-800 placeholder:text-slate-400',
             )}
           />
         </div>
+        <MemoSchedulePicker value={sendAt} onChange={setSendAt} isDark={isDark} />
       </div>
-
-      <ModalFooter>
-        <UIButton variant="secondary" onClick={onClose} disabled={loading}>취소</UIButton>
-        <UIButton onClick={() => void handleSend()} disabled={loading}>{loading ? '전송 중...' : '보내기'}</UIButton>
-      </ModalFooter>
     </UIModal>
   );
 }

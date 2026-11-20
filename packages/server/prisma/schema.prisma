@@ -68,10 +68,17 @@ model User {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   departmentId    String?
+  // 같은 부서 안에서의 조회 순번(조직도 표시용). 작을수록 먼저 나온다.
+  sortOrder       Int           @default(0)
   statusMessage   String?       // 프레즌스 상태(온라인/자리비움 등)
   statusNote      String?       // 자유 상태 메시지
   notepad         String?       // 개인 메모장(본인만 보임, 자동저장)
   mustChangePassword Boolean    @default(false) // 거래처 자동계정 등 공용 초기비밀번호로 생성된 계정 → 최초 로그인 시 강제 변경
+  // 2차 인증(TOTP). totpSecret은 AES-256-GCM으로 암호화해 저장하고, totpEnabled가 false면 등록 진행 중(미확정) 상태
+  totpSecret          String?
+  totpEnabled         Boolean   @default(false)
+  totpLastStep        Int?      // 마지막으로 인정된 30초 단위 step — 같은 코드 재사용 방지
+  totpRecoveryCodes   String?   // 복구 코드 sha256 해시 목록(JSON 배열), 사용하면 제거
   /// 거래처 MSSQL 사원 PK (hr_employee_master_id)
   externalEmpId   String?       @unique
   bookmarks       Bookmark[]
@@ -81,6 +88,7 @@ model User {
   department      Department?   @relation(fields: [departmentId], references: [id])
   affiliations    UserAffiliation[]
   sessions        UserSession[]
+  ssoTokens       SsoToken[]
   createdRooms    Room[]        @relation("RoomCreator")
   deviceTokens    DeviceToken[]
   sentMemos       Memo[]           @relation("SentMemos")
@@ -89,6 +97,7 @@ model User {
   orgGroupMemberships  OrgGroupMember[]
 
   @@index([departmentId])
+  @@index([departmentId, sortOrder])
 }
 
 /// 겸직 소속. User.departmentId는 메신저에 표시할 현재 법인/부서.
@@ -168,6 +177,8 @@ model Message {
   contextFilePath  String?   // 컨텍스트 스택: 파일 경로
   contextLine      Int?      // 컨텍스트 스택: 라인 번호
   contextBranch    String?   // 컨텍스트 스택: 브랜치
+  /// 보낸 사람이 만든 전송 고유 키. 네트워크 끊김 등으로 같은 메시지를 다시 보내도 한 번만 저장하기 위한 멱등 키
+  clientMessageId  String?
   bookmarks        Bookmark[]
   mentions         Mention[]
   replyTo          Message?        @relation("Reply", fields: [replyToId], references: [id])
@@ -184,6 +195,7 @@ model Message {
   @@index([roomId, createdAt])
   @@index([roomId, senderId, createdAt])
   @@index([fileExpiresAt])
+  @@unique([senderId, clientMessageId])
 }
 
 model Event {
@@ -230,6 +242,19 @@ model UserSession {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+/// 그룹웨어 SSO용 1회용 토큰 — 원문은 저장하지 않고 SHA-256 해시만 둔다. 짧은 유효시간(기본 60초) 안에 한 번만 검증된다.
+model SsoToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
 }
 
 model Reaction {
@@ -426,11 +451,15 @@ model Memo {
   subject    String
   body       String
   createdAt  DateTime        @default(now())
+  scheduledAt DateTime?
+  senderFavorite Boolean @default(false)
+  senderDeletedAt DateTime?
   sender     User            @relation("SentMemos", fields: [senderId], references: [id], onDelete: Cascade)
   recipients MemoRecipient[]
 
   @@index([senderId])
   @@index([createdAt])
+  @@index([scheduledAt])
 }
 
 model MemoRecipient {
@@ -439,6 +468,7 @@ model MemoRecipient {
   userId    String
   readAt    DateTime?
   deletedAt DateTime?
+  favorite  Boolean @default(false)
   memo      Memo      @relation(fields: [memoId], references: [id], onDelete: Cascade)
   user      User      @relation("ReceivedMemos", fields: [userId], references: [id], onDelete: Cascade)
 
@@ -453,4 +483,19 @@ model AppSetting {
   value     String   @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// 파일 전송 통제 감사 로그 — 전송 허용/차단 이력(누가·어느 방에·무슨 파일을·왜 막혔는지)
+model FileTransferAudit {
+  id        String   @id @default(cuid())
+  userId    String
+  roomId    String?
+  fileName  String
+  fileSize  BigInt   @default(0)
+  allowed   Boolean
+  reason    String?  // 차단 사유 코드(FILE_TYPE_BLOCKED 등)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
 }

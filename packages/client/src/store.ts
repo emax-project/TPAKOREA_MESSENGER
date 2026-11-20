@@ -2,8 +2,9 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Socket } from 'socket.io-client';
 import { authApi, getBaseUrl, type User } from './api';
-import { clearSessionDate, getActiveToken, markSessionToday, removeStoredToken, setStoredToken, setTrustedBaseUrl } from './utils/authSession';
+import { clearSessionDate, getActiveToken, getStoredToken, markSessionToday, removeStoredToken, setStoredToken, setTrustedBaseUrl } from './utils/authSession';
 import type { OrgThemeId } from './utils/orgTheme';
+import { useScreenLockStore } from './utils/screenLock';
 
 type AuthState = {
   user: User | null;
@@ -16,7 +17,7 @@ type AuthState = {
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       token: null,
       mustChangePassword: false,
@@ -38,10 +39,13 @@ export const useAuthStore = create<AuthState>()(
       },
       setMustChangePassword: (value) => set({ mustChangePassword: value }),
       logout: () => {
-        authApi.logout().catch(() => {});
+        const token = get().token ?? getStoredToken();
+        if (token) void authApi.logout(token).catch(() => {});
         removeStoredToken();
         clearSessionDate();
         window.electronAPI?.clearAppCache?.().catch(() => {});
+        // 다음 사용자가 잠긴 화면을 물려받지 않도록 잠금 상태도 함께 지운다
+        useScreenLockStore.getState().unlock();
         set({ user: null, token: null, mustChangePassword: false });
       },
     }),
@@ -54,6 +58,8 @@ export const useAuthStore = create<AuthState>()(
         const saved = persisted as Partial<AuthState> | undefined;
         const activeToken = getActiveToken();
         if (!activeToken) {
+          const expiredToken = getStoredToken();
+          if (expiredToken) void authApi.logout(expiredToken).catch(() => {});
           removeStoredToken();
           clearSessionDate();
           return { ...current, ...saved, user: null, token: null, mustChangePassword: false };

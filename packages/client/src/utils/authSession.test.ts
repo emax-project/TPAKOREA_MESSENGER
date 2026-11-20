@@ -3,6 +3,7 @@ import {
   LOGIN_DATE_KEY,
   clearSessionDate,
   getActiveToken,
+  getStoredToken,
   isSessionFromToday,
   markSessionToday,
   todayLocalDate,
@@ -48,11 +49,12 @@ describe('authSession', () => {
     expect(getActiveToken()).toBe('abc');
   });
 
-  it('yesterday session is not active', () => {
+  it('yesterday session remains available for server logout only', () => {
     localStorage.setItem('token', 'abc');
     localStorage.setItem(LOGIN_DATE_KEY, '2020-01-01');
     expect(isSessionFromToday()).toBe(false);
     expect(getActiveToken()).toBeNull();
+    expect(getStoredToken()).toBe('abc');
   });
 
   it('clearSessionDate drops the login date', () => {

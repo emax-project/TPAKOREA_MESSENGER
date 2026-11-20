@@ -1,9 +1,10 @@
-const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog, session, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, Tray, screen, shell, nativeImage, dialog, session, safeStorage, powerMonitor, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { pipeline } = require('node:stream/promises');
 const { Readable } = require('node:stream');
+const { createHash } = require('node:crypto');
 
 // userData 폴더를 브랜드별로 분리한다(Roaming/TPA-Korea). package.json의 "name"은 모든 브랜드 빌드에서
 // "client"로 같아서, 이름을 지정하지 않으면 같은 PC의 다른 브랜드 앱과 localStorage(서버 주소 등)가 섞인다.
@@ -11,10 +12,67 @@ const { Readable } = require('node:stream');
 // 반드시 app.getPath('userData')를 처음 쓰기 전에 호출할 것.
 app.setName('TPA-Korea');
 
-// Windows: GPU 렌더링 문제로 검은 화면 발생 시 소프트웨어 렌더링 강제
-if (process.platform === 'win32') {
-  app.commandLine.appendSwitch('disable-gpu');
-  app.commandLine.appendSwitch('disable-gpu-sandbox');
+// 그래픽(GPU) 가속: 기본은 사용. 드라이버 문제로 GPU 프로세스가 반복 종료하는 PC나 사용자가
+// 직접 끈 경우에만 소프트웨어 렌더링으로 내린다(정책은 gpuPolicy.js, 상태는 userData/gpu-state.json).
+// GPU 샌드박스는 끄지 않는다 — 예전 무조건 --disable-gpu-sandbox 설정은 보안만 약하게 만들었다.
+const gpuPolicy = require('./gpuPolicy');
+const policyHelpers = require('./policyHelpers');
+const GPU_STATE_FILE = path.join(app.getPath('userData'), 'gpu-state.json');
+
+function readGpuState() {
+  try {
+    return gpuPolicy.normalizeState(JSON.parse(fs.readFileSync(GPU_STATE_FILE, 'utf8')));
+  } catch {
+    return gpuPolicy.emptyState();
+  }
+}
+
+function writeGpuState(state) {
+  try {
+    fs.writeFileSync(GPU_STATE_FILE, JSON.stringify(state));
+  } catch (err) {
+    console.error('[gpu] state write failed', err);
+  }
+}
+
+const gpuDecision = gpuPolicy.decideGpu({ env: process.env, argv: process.argv, state: readGpuState() });
+if (gpuDecision.disable) {
+  console.warn(`[gpu] 하드웨어 가속 비활성화 (${gpuDecision.reason})`);
+  app.disableHardwareAcceleration();
+}
+
+app.on('child-process-gone', (_event, details) => {
+  const before = readGpuState();
+  const after = gpuPolicy.recordGpuExit(before, details);
+  if (after !== before) {
+    console.error('[gpu] GPU 프로세스 비정상 종료:', details.reason);
+    writeGpuState(after);
+  }
+});
+
+/** 트레이/앱 메뉴용 — 그래픽 가속 사용 여부를 사용자가 직접 바꾼다(재시작 후 적용). */
+function gpuMenuItem() {
+  const forced = readGpuState().forceDisable;
+  return {
+    label: '그래픽 가속 사용',
+    type: 'checkbox',
+    checked: !forced,
+    click: async () => {
+      writeGpuState(gpuPolicy.setUserForceDisable(readGpuState(), !forced));
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        buttons: ['지금 재시작', '나중에'],
+        defaultId: 0,
+        cancelId: 1,
+        message: forced ? '그래픽 가속을 켰습니다.' : '그래픽 가속을 껐습니다.',
+        detail: '화면이 검게 나오거나 깨질 때는 끄면 해결될 수 있습니다. 재시작하면 적용됩니다.',
+      });
+      if (response === 0) {
+        app.relaunch();
+        doQuit();
+      }
+    },
+  };
 }
 
 // 단일 인스턴스 잠금: 두 번 실행하면 기존 창을 포커스하고 종료
@@ -88,10 +146,54 @@ ipcMain.handle('token-clear', () => {
   return true;
 });
 
+// Remove credentials and cookies left by older desktop versions.
+async function clearLegacyGroupwareData() {
+  const file = path.join(app.getPath('userData'), 'gw-cred.enc');
+  try {
+    fs.rmSync(file, { force: true });
+  } catch (error) {
+    console.error('[groupware] legacy credentials cleanup failed', error);
+  }
+  try {
+    await session.fromPartition('persist:groupware').clearStorageData();
+  } catch (error) {
+    console.error('[groupware] legacy session cleanup failed', error);
+  }
+}
+
 const NOTIF_WIDTH = 360;
 const NOTIF_HEIGHT = 100;
 const NOTIF_HEIGHT_PROGRESS = 128;
 const NOTIF_DURATION_MS = 4500;
+
+// 메인 창 크기(width/height) 기억 — PC에서 사용자가 원하는 대로 넓혀 쓸 수 있도록
+// 모바일 기본 규격(430x900)은 최초 실행 시에만 적용하고, 이후에는 마지막으로 사용한 크기를 복원한다.
+const WINDOW_BOUNDS_PREF_PATH = path.join(app.getPath('userData'), 'window-bounds.json');
+const DEFAULT_MAIN_WINDOW_WIDTH = 430;
+const DEFAULT_MAIN_WINDOW_HEIGHT = 900;
+
+function readWindowBoundsPref() {
+  try {
+    const raw = fs.readFileSync(WINDOW_BOUNDS_PREF_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const width = Number(parsed?.width);
+    const height = Number(parsed?.height);
+    return {
+      width: Number.isFinite(width) ? width : null,
+      height: Number.isFinite(height) ? height : null,
+    };
+  } catch {
+    return { width: null, height: null };
+  }
+}
+
+function writeWindowBoundsPref(bounds) {
+  try {
+    fs.writeFileSync(WINDOW_BOUNDS_PREF_PATH, JSON.stringify(bounds, null, 2), 'utf8');
+  } catch {
+    // 저장 실패(읽기 전용 FS 등)는 무시 — 다음 실행 때 기본 크기로 돌아갈 뿐
+  }
+}
 
 function escapeHtml(str) {
   if (typeof str !== 'string') return '';
@@ -361,14 +463,6 @@ function showCustomNotification(title, body, options) {
   }
 }
 
-function updateNotificationProgress(percent) {
-  if (!customNotifWin || customNotifWin.isDestroyed() || !isUpdateProgressWindow) return;
-  const pct = Math.min(100, Math.max(0, percent));
-  const round = Math.round(pct);
-  customNotifWin.webContents.executeJavaScript(
-    '(function(){ var b=document.querySelector(".progress-bar"); var t=document.querySelector(".progress-text"); if(b)b.style.width="' + pct + '%"; if(t)t.textContent="' + round + '%"; })();'
-  ).catch(() => {});
-}
 const { autoUpdater } = require('electron-updater');
 
 let updaterBaseUrl = '';
@@ -389,9 +483,10 @@ let isQuitting = false;
 let updateDownloadedPending = false;
 let pendingUpdateVersion = null;
 // 시작 시/30분 주기/설정화면 수동확인/메뉴 수동확인, 총 4곳에서 checkForUpdates()를
-// 부른다. autoDownload:true라 호출이 겹치면 같은 업데이트를 각자 또 받아버리므로,
+// 부른다. 중복된 업데이트 조회를 피하기 위해,
 // 진행 중인 검사가 있으면 새로 시작하지 않고 그 Promise를 그대로 재사용한다.
 let updateCheckPromise = null;
+let updateDownloadPromise = null;
 function safeCheckForUpdates() {
   if (updateDownloadedPending) {
     // 이미 다운로드까지 끝나 설치 대기 중 — 다시 받을 필요 없음
@@ -652,6 +747,18 @@ function createWindow(options = {}) {
     win.on('closed', () => {
       if (mainWindow === win) mainWindow = null;
     });
+
+    // 메인 화면(로그인 화면 제외)에서 사용자가 드래그로 크기를 바꾸면 기억해 뒀다가 다음 실행 때 복원
+    let boundsSaveTimer = null;
+    win.on('resize', () => {
+      if (win.__emaxUiMode !== 'main' || win.isMaximized()) return;
+      clearTimeout(boundsSaveTimer);
+      boundsSaveTimer = setTimeout(() => {
+        if (win.isDestroyed()) return;
+        const [width, height] = win.getSize();
+        writeWindowBoundsPref({ width, height });
+      }, 400);
+    });
   }
 
   return win;
@@ -666,6 +773,20 @@ function openSecondWindow() {
 }
 
 function openChatWindow(roomId) {
+  const chatWindows = BrowserWindow.getAllWindows().filter(
+    (w) => !w.isDestroyed() && typeof w.__emaxInitialRoute === 'string' && w.__emaxInitialRoute.startsWith('/chat/'),
+  );
+  const existing = chatWindows.find((w) => w.__emaxInitialRoute === `/chat/${roomId}`);
+  if (existing) {
+    // 이미 열려 있는 방이면 새로 만들지 않고 그 창을 앞으로 가져온다
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return;
+  }
+  if (!policyHelpers.canOpenChatWindow(chatWindows.length, maxChatWindows)) {
+    showCustomNotification('TPA-Korea', `대화창은 최대 ${maxChatWindows}개까지 열 수 있습니다. 다른 창을 닫고 다시 시도해 주세요.`);
+    return;
+  }
   createWindow({
     width: 480,
     height: 680,
@@ -725,6 +846,7 @@ function createTray() {
       label: '로그아웃',
       click: () => broadcastLogout(),
     },
+    gpuMenuItem(),
     { type: 'separator' },
     { label: '종료', click: () => doQuit() },
   ]);
@@ -739,6 +861,56 @@ function createTray() {
 
 ipcMain.handle('open-second-window', () => {
   openSecondWindow();
+});
+
+// ── 팝업 대화창 ↔ 메인 창 소켓 중계 ───────────────────────────────────
+// 서버 실시간 연결은 메인 창 하나만 유지하고, 팝업 대화창은 이 중계를 통해 이벤트를 받고 보낸다.
+// 메인 창이 아직 준비되지 않았거나 닫혀 있으면 available이 false라서 팝업이 자체 연결로 대신한다.
+let socketRelayHost = null;
+const isChatPopupWindow = (w) =>
+  !!w && !w.isDestroyed() && typeof w.__emaxInitialRoute === 'string' && w.__emaxInitialRoute.startsWith('/chat/');
+const relayHostAlive = () => !!socketRelayHost && !socketRelayHost.isDestroyed();
+
+function broadcastRelayEvent(payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (isChatPopupWindow(w)) w.webContents.send('socket-relay:event', payload);
+  }
+}
+
+ipcMain.on('socket-relay:host-register', (event) => {
+  // 메인 창만 호스트가 될 수 있다(팝업·두 번째 창이 연결을 가로채지 못하게)
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  socketRelayHost = event.sender;
+});
+
+ipcMain.on('socket-relay:host-unregister', (event) => {
+  if (socketRelayHost !== event.sender) return;
+  socketRelayHost = null;
+  broadcastRelayEvent({ event: '__disconnect', args: ['relay-host-gone'] });
+});
+
+ipcMain.handle('socket-relay:available', (event) => isChatPopupWindow(BrowserWindow.fromWebContents(event.sender)) && relayHostAlive());
+
+ipcMain.on('socket-relay:request', (event, msg) => {
+  if (!isChatPopupWindow(BrowserWindow.fromWebContents(event.sender)) || !msg || typeof msg.reqId !== 'number') return;
+  if (!relayHostAlive()) {
+    event.sender.send('socket-relay:response', { reqId: msg.reqId, error: 'RELAY_UNAVAILABLE' });
+    return;
+  }
+  socketRelayHost.send('socket-relay:request', { ...msg, from: event.sender.id });
+});
+
+ipcMain.on('socket-relay:response', (event, msg) => {
+  if (event.sender !== socketRelayHost || !msg) return;
+  const target = webContents.fromId(msg.to);
+  if (!target || target.isDestroyed()) return;
+  const { to: _to, ...rest } = msg;
+  target.send('socket-relay:response', rest);
+});
+
+ipcMain.on('socket-relay:event', (event, msg) => {
+  if (event.sender !== socketRelayHost || !msg || typeof msg.event !== 'string') return;
+  broadcastRelayEvent({ event: msg.event, args: Array.isArray(msg.args) ? msg.args : [] });
 });
 
 ipcMain.handle('open-chat-window', (_, roomId) => {
@@ -774,6 +946,7 @@ ipcMain.handle('window-set-ui-mode', (event, mode, width, height) => {
   const isLogin = mode === 'login';
   if (win.isMaximized()) win.unmaximize();
   win.setMaximizable(!isLogin);
+  win.__emaxUiMode = isLogin ? 'login' : 'main';
   if (isLogin) {
     const w = Math.max(360, Math.round(Number(width) || 430));
     const h = Math.max(560, Math.round(Number(height) || 720));
@@ -790,9 +963,17 @@ ipcMain.handle('window-set-ui-mode', (event, mode, width, height) => {
     }
   } else {
     const wa = screen.getPrimaryDisplay().workAreaSize;
+    const maxW = Math.max(wa.width, 430);
+    const maxH = Math.max(wa.height, 900);
     win.setResizable(true);
     win.setMinimumSize(360, 560);
-    win.setMaximumSize(Math.max(wa.width, 430), Math.max(wa.height, 900));
+    win.setMaximumSize(maxW, maxH);
+    // 로그인 창(모바일 고정 규격)에서 넘어온 직후에는 마지막으로 사용자가 조정한 크기를 복원하고,
+    // 저장된 값이 없으면(최초 실행) 기본 모바일 규격을 사용한다.
+    const pref = readWindowBoundsPref();
+    const targetW = Math.min(Math.max(pref.width ?? DEFAULT_MAIN_WINDOW_WIDTH, 360), maxW);
+    const targetH = Math.min(Math.max(pref.height ?? DEFAULT_MAIN_WINDOW_HEIGHT, 560), maxH);
+    win.setSize(Math.round(targetW), Math.round(targetH));
     if (process.platform === 'win32') {
       try {
         win.setTitleBarOverlay({ color: '#1e293b', symbolColor: '#e2e8f0', height: 38 });
@@ -924,7 +1105,12 @@ ipcMain.handle('download-file-stream', async (event, { messageId, filename }) =>
   const url = `${trustedBaseUrl.replace(/\/$/, '')}/files/download/${messageId}`;
   try {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok || !res.body) return { ok: false, error: `HTTP_${res.status}` };
+    if (!res.ok) {
+      const failure = await res.json().catch(() => null);
+      const error = failure?.code === 'FILE_DOWNLOAD_DISABLED' ? failure.code : `HTTP_${res.status}`;
+      return { ok: false, error };
+    }
+    if (!res.body) return { ok: false, error: 'DOWNLOAD_FAILED' };
     await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(target));
     return { ok: true, path: target };
   } catch (err) {
@@ -948,8 +1134,24 @@ ipcMain.on('emax-get-initial-route', (event) => {
   event.returnValue = win?.__emaxInitialRoute ?? null;
 });
 
+// 화면 잠금 상태(렌더러가 알려줌) — 잠겨 있으면 알림에 대화 내용·보낸 사람이 보이지 않게 한다
+let screenLocked = false;
+ipcMain.on('set-screen-locked', (_, locked) => {
+  screenLocked = locked === true;
+});
+
+// 서버 보안 정책의 "동시에 열 수 있는 대화창 수"(0 = 제한 없음). 렌더러가 정책을 받으면 알려준다.
+let maxChatWindows = 0;
+ipcMain.on('set-max-chat-windows', (_, value) => {
+  maxChatWindows = policyHelpers.sanitizeMaxChatWindows(value);
+});
+
 ipcMain.handle('show-notification', (_, { title, body, roomId, icon, imagePreview }) => {
-  showCustomNotification(title || 'TPA-Korea', body || '', { roomId: roomId || null, icon: icon || null, imagePreview: imagePreview || null });
+  const n = policyHelpers.maskNotificationIfLocked(
+    { title: title || 'TPA-Korea', body: body || '', roomId: roomId || null, icon: icon || null, imagePreview: imagePreview || null },
+    screenLocked,
+  );
+  showCustomNotification(n.title, n.body, { roomId: n.roomId, icon: n.icon, imagePreview: n.imagePreview });
 });
 
 // 앱 아이콘 배지 (맥 도크/윈도우 태스크바) - 안 읽은 개수를 그대로 표시
@@ -1034,6 +1236,24 @@ ipcMain.handle('check-for-updates', async () => {
     const v = result?.updateInfo?.version;
     const current = app.getVersion();
     const hasUpdate = Boolean(v && v !== current);
+    if (hasUpdate && !updateDownloadedPending && process.platform !== 'darwin') {
+      const options = {
+        type: 'info',
+        message: `새 버전 v${v}을 다운로드할까요?`,
+        buttons: ['다운로드', '나중에'],
+        defaultId: 1,
+        cancelId: 1,
+      };
+      const choice = mainWindow && !mainWindow.isDestroyed()
+        ? await dialog.showMessageBox(mainWindow, options)
+        : await dialog.showMessageBox(options);
+      if (choice.response === 0 && !updateDownloadedPending) {
+        updateDownloadPromise ??= autoUpdater.downloadUpdate().finally(() => {
+          updateDownloadPromise = null;
+        });
+        await updateDownloadPromise;
+      }
+    }
     const downloaded = hasUpdate && pendingUpdateVersion === v;
     if (downloaded && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-downloaded');
@@ -1063,6 +1283,7 @@ ipcMain.handle('quit-and-install', () => {
       error: 'macOS에서는 DMG를 다운로드해 Applications 폴더에 다시 설치해 주세요.',
     };
   }
+  if (!updateDownloadedPending) return { success: false, error: '다운로드가 완료된 업데이트가 없습니다.' };
   try {
     autoUpdater.quitAndInstall(false, true);
     return { success: true };
@@ -1077,6 +1298,10 @@ ipcMain.handle('open-update-download', (_, version) => {
 });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.on('print-memo', (event) => {
+  event.sender.print();
+});
 
 ipcMain.handle('get-app-info', () => ({
   version: app.getVersion(),
@@ -1121,30 +1346,96 @@ ipcMain.handle('fetch-user-avatar', async (_, { userId }) => {
   }
 });
 
+// 업데이트 설치 파일이 쌓이는 폴더 정리 (Windows: %LOCALAPPDATA%\tpa-korea-updater\pending).
+// 이전 버전은 앱 이름이 'client'라 %LOCALAPPDATA%\client-updater 를 썼고 설치 파일(약 166MB)이 그대로 남아 있다.
+// - 현재 폴더: 가장 최근 설치 파일 1개(차등 업데이트 기준)만 남기고 나머지·미완성 파일 삭제
+// - 옛 폴더: 더 이상 쓰이지 않으므로 pending 안의 파일 모두 삭제
+async function pruneUpdaterCache() {
+  if (updateDownloadPromise || updateDownloadedPending) return;
+  if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) return;
+  const readFiles = (dir) => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isFile())
+        .map((e) => ({ name: e.name, mtimeMs: fs.statSync(path.join(dir, e.name)).mtimeMs }));
+    } catch {
+      return [];
+    }
+  };
+  const remove = (dir, names) => {
+    for (const name of names) {
+      try {
+        fs.unlinkSync(path.join(dir, name));
+        console.log('[updater-cache] 삭제:', name);
+      } catch (err) {
+        console.warn('[updater-cache] 삭제 실패:', name, err?.message);
+      }
+    }
+  };
+  const cache = path.join(process.env.LOCALAPPDATA, 'tpa-korea-updater');
+  const current = path.join(cache, 'pending');
+  const pendingFiles = readFiles(current);
+  const staleFiles = policyHelpers.pickStaleUpdaterFiles(pendingFiles);
+  remove(current, staleFiles);
+  const cachedInstaller = pendingFiles.find(({ name }) => /\.exe$/i.test(name) && !staleFiles.includes(name));
+  if (cachedInstaller) {
+    const installedCopy = path.join(cache, 'installer.exe');
+    const pendingCopy = path.join(current, cachedInstaller.name);
+    const digest = async (file) => {
+      const hash = createHash('sha512');
+      for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+      return hash.digest('hex');
+    };
+    try {
+      const [installedStat, pendingStat] = await Promise.all([fs.promises.stat(installedCopy), fs.promises.stat(pendingCopy)]);
+      if (installedStat.size === pendingStat.size) {
+        const [installedHash, pendingHash] = await Promise.all([digest(installedCopy), digest(pendingCopy)]);
+        if (installedHash === pendingHash && !updateDownloadPromise && !updateDownloadedPending) {
+          remove(current, [cachedInstaller.name]);
+        }
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('[updater-cache] 중복 확인 실패:', error.message);
+    }
+  }
+  const legacy = path.join(process.env.LOCALAPPDATA, 'client-updater', 'pending');
+  remove(legacy, readFiles(legacy).map((f) => f.name));
+}
+
 function setupAutoUpdate() {
   if (isDev || !app.isPackaged) return;
+  // 설치 직후·재실행 때 한 번 정리(업데이트 확인과 겹치지 않도록 잠시 뒤에)
+  setTimeout(pruneUpdaterCache, 60 * 1000);
   if (updaterBaseUrl) {
-    autoUpdater.setFeedURL({ provider: 'generic', url: updaterBaseUrl });
+    // 업데이트 서버를 직접 지정하는 경우에도 평문(http)은 쓰지 않는다 — 중간자가 설치 파일을
+    // 바꿔치기할 수 있다. https가 아니면 지정을 무시하고 기본(GitHub Releases) 경로를 쓴다.
+    if (/^https:\/\//i.test(updaterBaseUrl)) {
+      autoUpdater.setFeedURL({ provider: 'generic', url: updaterBaseUrl });
+    } else {
+      console.error('[updater] ELECTRON_UPDATER_BASE_URL은 https여야 합니다. 무시하고 기본 경로를 사용합니다.');
+    }
   }
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on('update-available', () => {
-    showCustomNotification('TPA-Korea 업데이트', '새 버전을 다운로드 중입니다. 완료 후 앱을 재시작하면 적용됩니다.', { persistent: true, progress: 0 });
-  });
-  autoUpdater.on('download-progress', (progress) => {
-    updateNotificationProgress(progress.percent);
+  // 다운그레이드·시험판 설치를 막는다. (설치 파일의 sha512 검증은 electron-updater가 항상 수행하고,
+  // 서명된 빌드는 app-update.yml의 publisherName으로 Windows 코드 서명 발행자도 검증한다 — 아래 DEPLOY 문서 참고)
+  autoUpdater.allowDowngrade = false;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  let announcedVersion;
+  autoUpdater.on('update-available', ({ version }) => {
+    if (announcedVersion === version) return;
+    announcedVersion = version;
+    showCustomNotification('TPA-Korea 업데이트', `새 버전 v${version}이 있습니다. 설정에서 업데이트를 확인해 주세요.`);
   });
   autoUpdater.on('update-downloaded', (info) => {
     pendingUpdateVersion = info?.version || null;
     updateDownloadedPending = true;
     const isMac = process.platform === 'darwin';
-    // 사용 중 자동 재시작하지 않는다. Windows는 앱을 종료할 때(autoInstallOnAppQuit) 설치되고,
-    // 바로 적용하려면 설정 화면의 '지금 재시작'(quit-and-install)을 쓴다. (CSIN-Tech와 동일)
     showCustomNotification(
       'TPA-Korea 업데이트 준비됨',
       isMac
         ? '설정에서 DMG를 다운로드해 Applications에 다시 설치해 주세요.'
-        : '앱을 종료하면 새 버전이 설치됩니다. 지금 적용하려면 설정에서 재시작해 주세요.',
+        : '설정에서 설치할 시점을 선택해 주세요.',
     );
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
       mainWindow.webContents.send('update-downloaded');
@@ -1176,7 +1467,18 @@ app.on('second-instance', () => {
   }
 });
 
+// OS 화면 잠금·절전 진입 시 열려 있는 모든 창에 알려 앱 화면도 함께 잠근다
+function notifySystemLock() {
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('system-lock');
+  });
+}
+
 app.whenReady().then(() => {
+  void clearLegacyGroupwareData();
+  powerMonitor.on('lock-screen', notifySystemLock);
+  powerMonitor.on('suspend', notifySystemLock);
+
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.tpakorea.message');
   }
@@ -1208,6 +1510,8 @@ app.whenReady().then(() => {
     {
       label: '도움말',
       submenu: [
+        gpuMenuItem(),
+        { type: 'separator' },
         {
           label: '업데이트 확인',
           click: () => {
@@ -1216,7 +1520,7 @@ app.whenReady().then(() => {
                 .then((r) => {
                   const v = r?.updateInfo?.version;
                   const current = app.getVersion();
-                  const body = v ? (v === current ? '이미 최신 버전입니다.' : `새 버전 ${v}이(가) 있습니다. 다운로드 후 앱을 재시작하면 적용됩니다.`) : '업데이트 정보를 확인했습니다.';
+                  const body = v ? (v === current ? '이미 최신 버전입니다.' : `새 버전 ${v}이(가) 있습니다. 설정에서 업데이트를 확인해 주세요.`) : '업데이트 정보를 확인했습니다.';
                   showCustomNotification('TPA-Korea', body);
                 })
                 .catch((e) => {
@@ -1233,20 +1537,9 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(menu);
 });
 
-app.on('before-quit', (e) => {
-  if (!isQuitting) isQuitting = true;
-  // 종료 후 디스크에 대화·쪽지·조직도 캐시가 남지 않도록 정리(완료를 기다리지 않는 best-effort)
+app.on('before-quit', () => {
+  isQuitting = true;
   clearAppCache();
-  // 업데이트 대기 중이면 quitAndInstall로 설치 후 재시작 (한 번에 적용)
-  if (updateDownloadedPending && app.isPackaged && !isDev) {
-    updateDownloadedPending = false;
-    e.preventDefault();
-    setImmediate(() => {
-      app.removeAllListeners('window-all-closed');
-      BrowserWindow.getAllWindows().forEach((w) => { if (!w.isDestroyed()) w.destroy(); });
-      autoUpdater.quitAndInstall(false, true);
-    });
-  }
 });
 
 app.on('window-all-closed', () => {

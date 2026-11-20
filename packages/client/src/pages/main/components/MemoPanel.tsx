@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from 'react';
-import type { MemoItem } from '../../../api';
+import { createPortal } from 'react-dom';
+import type { MemoItem, OrgUser } from '../../../api';
 import UICloseButton from '../../../components/ui/UICloseButton';
 import {
   PanelNoDragWrap,
@@ -9,19 +10,32 @@ import {
   usePanelNoDrag,
 } from '../../../components/PanelDragHeader';
 import { cn } from '../../../utils/cn';
-import { useThemeStore } from '../../../store';
+import { useAuthStore, useThemeStore } from '../../../store';
 import { getOrgTheme } from '../../../utils/orgTheme';
 
 export type { MemoItem };
 
-type MemoTab = 'inbox' | 'sent';
+const memoTabs = [
+  ['all', '전체쪽지함'], ['inbox', '받은쪽지함'], ['sent', '보낸쪽지함'],
+  ['unread', '안읽은쪽지함'], ['favorite', '관심쪽지함'], ['scheduled', '예약쪽지함'],
+] as const;
+type MemoTab = typeof memoTabs[number][0];
+type MemoDirection = 'inbox' | 'sent';
 
-type MemoPanelProps = {
+export type MemoDetailActions = {
+  onComposeFromMemo: (recipients: OrgUser[], body?: string) => void;
+  onChat: (userId: string) => void | Promise<void>;
+  onProfile: (user: OrgUser) => void | Promise<void>;
+};
+
+type MemoPanelProps = MemoDetailActions & {
   isDark: boolean;
   inbox: MemoItem[];
   sent: MemoItem[];
   panelWrapStyle: (maxWidth: number) => { className: string; style: React.CSSProperties };
   onOpenCompose: () => void;
+  onRefresh: () => void;
+  onFavorite: (memo: MemoItem) => void | Promise<void>;
   onMarkRead: (memo: MemoItem) => void | Promise<void>;
   onDelete: (memo: MemoItem) => void | Promise<void>;
 };
@@ -30,20 +44,73 @@ function formatRecipients(memo: MemoItem) {
   return memo.recipients.map((r) => r.user.name).join(', ');
 }
 
+function printMemo() {
+  if (window.electronAPI?.printMemo) window.electronAPI.printMemo();
+  else window.print();
+}
+
+function MemoPrintSheet({ memo, bodyFontSize = 14 }: { memo: MemoItem; bodyFontSize?: number }) {
+  const date = new Date(memo.createdAt).toLocaleString('ko-KR');
+  return createPortal(
+    <article className="memo-print-sheet">
+      <style>{`
+        @media screen { .memo-print-sheet { display: none; } }
+        @media print {
+          body > :not(.memo-print-sheet) { display: none !important; }
+          html, body { height: auto !important; overflow: visible !important; background: white !important; }
+          .memo-print-sheet { color: black; overflow-wrap: anywhere; }
+        }
+      `}</style>
+      <h1>{memo.subject}</h1>
+      <p>보낸 사람: {memo.sender.name}</p>
+      <p>받는 사람: {formatRecipients(memo)}</p>
+      <p>{date}</p>
+      <p style={{ whiteSpace: 'pre-wrap', fontSize: bodyFontSize }}>{memo.body}</p>
+    </article>,
+    document.body,
+  );
+}
+
+function asRecipient(user: MemoItem['sender']): OrgUser {
+  return { ...user, email: user.email ?? '' };
+}
+
+function forwardText(memo: MemoItem) {
+  return [
+    `전달: ${memo.subject}`, '',
+    `보낸 사람: ${memo.sender.name}`,
+    `받는 사람: ${formatRecipients(memo)}`,
+    `보낸 시간: ${new Date(memo.createdAt).toLocaleString('ko-KR')}`, '',
+    memo.body,
+  ].join('\n');
+}
+
 function MemoDetail({
   memo,
   tab,
   isDark,
   onBack,
   onDelete,
-}: {
+  onComposeFromMemo,
+  onChat,
+  onProfile,
+}: MemoDetailActions & {
   memo: MemoItem;
-  tab: MemoTab;
+  tab: MemoDirection;
   isDark: boolean;
   onBack: () => void;
   onDelete: (memo: MemoItem) => void | Promise<void>;
 }) {
   const isInbox = tab === 'inbox';
+  const myId = useAuthStore((state) => state.user?.id);
+  const [bodyFontSize, setBodyFontSize] = useState(14);
+  const sender = { ...memo.sender, email: memo.sender.email ?? '' };
+  const replyAllRecipients = [...new Map(
+    [memo.sender, ...memo.recipients.map(({ user }) => user)]
+      .filter((user) => user.id !== myId)
+      .map((user) => [user.id, { ...user, email: user.email ?? '' }]),
+  ).values()];
+  const date = new Date(memo.createdAt).toLocaleString('ko-KR');
   const fromLabel = isInbox ? memo.sender.name : formatRecipients(memo);
   const metaLabel = isInbox ? '보낸 사람' : '받는 사람';
   const accentTheme = useThemeStore((s) => s.accentTheme);
@@ -68,7 +135,7 @@ function MemoDetail({
             ← 목록
           </button>
         )}
-        right={isInbox ? (
+        right={(
           <button
             type="button"
             onClick={() => void onDelete(memo)}
@@ -79,18 +146,46 @@ function MemoDetail({
           >
             삭제
           </button>
-        ) : undefined}
+        )}
       />
 
+      <div role="group" aria-label="쪽지 기능" className="flex flex-wrap items-center gap-1 border-b border-slate-500/20 px-2 py-1">
+        {[
+          ...(isInbox ? [
+            { label: '대화하기', action: () => void onChat(sender.id) },
+            { label: '회신', action: () => onComposeFromMemo([sender]) },
+            { label: '전체회신', action: () => onComposeFromMemo(replyAllRecipients) },
+            { label: '프로필', action: () => void onProfile(sender) },
+          ] : []),
+          { label: '전달', action: () => onComposeFromMemo([], forwardText(memo)) },
+          { label: '인쇄', action: printMemo },
+        ].map(({ label, action }) => (
+          <button key={label} type="button" onClick={action} className={cn(
+            'rounded-md border-none bg-transparent px-2 py-1 text-xs font-medium cursor-pointer',
+            isDark ? 'text-slate-200 hover:bg-slate-700' : 'text-slate-700 hover:bg-slate-100',
+          )}>
+            {label}
+          </button>
+        ))}
+        <select aria-label="글자 크기" value={bodyFontSize} onChange={(event) => setBodyFontSize(Number(event.target.value))}
+          className={cn('rounded-md border border-slate-500/30 px-1 py-1 text-xs', isDark ? 'bg-slate-900 text-slate-200' : 'bg-white text-slate-700')}>
+          <option value={12}>작은 글자</option>
+          <option value={14}>보통 글자</option>
+          <option value={18}>큰 글자</option>
+          <option value={22}>아주 큰 글자</option>
+        </select>
+      </div>
+      <MemoPrintSheet memo={memo} bodyFontSize={bodyFontSize} />
       <div className="flex-1 min-h-0 overflow-auto px-5 py-4">
         <h4 className={cn('m-0 mb-3 text-lg font-bold break-words', isDark ? 'text-white' : 'text-slate-900')}>
           {memo.subject}
         </h4>
         <div className={cn('mb-4 space-y-1 text-sm', isDark ? 'text-slate-400' : 'text-slate-500')}>
           <div><span className="font-semibold">{metaLabel}: </span>{fromLabel}</div>
-          <div>{new Date(memo.createdAt).toLocaleString('ko-KR')}</div>
+          <div>{date}</div>
         </div>
         <div
+          style={{ fontSize: bodyFontSize }}
           className={cn(
             'whitespace-pre-wrap break-words rounded-xl border px-4 py-3 text-sm leading-relaxed',
             isDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-800',
@@ -112,7 +207,7 @@ function MemoDetail({
   );
 }
 
-function matchesMemoSearch(memo: MemoItem, tab: MemoTab, query: string) {
+function matchesMemoSearch(memo: MemoItem, tab: MemoDirection, query: string) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const people =
@@ -132,6 +227,11 @@ function MemoPanel({
   sent,
   panelWrapStyle,
   onOpenCompose,
+  onRefresh,
+  onFavorite,
+  onComposeFromMemo,
+  onChat,
+  onProfile,
   onMarkRead,
   onDelete,
 }: MemoPanelProps) {
@@ -140,36 +240,51 @@ function MemoPanel({
   const orgTheme = getOrgTheme(accentTheme);
   const useCustomAccent = !isDark && orgTheme.id !== 'default';
   const { noDragClass, noDragStyle } = usePanelNoDrag();
-  const [tab, setTab] = useState<MemoTab>('inbox');
+  const myId = useAuthStore((state) => state.user?.id);
+  const [tab, setTab] = useState<MemoTab>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-
-  const list = tab === 'inbox' ? inbox : sent;
-  const filteredList = useMemo(
-    () => list.filter((m) => matchesMemoSearch(m, tab, searchQuery)),
-    [list, tab, searchQuery],
-  );
-  const selectedMemo = useMemo(
-    () => list.find((m) => m.id === selectedId) ?? null,
-    [list, selectedId],
-  );
+  const direction = (memo: MemoItem): MemoDirection => memo.sender.id === myId ? 'sent' : 'inbox';
+  const delivered = useMemo(() => [...inbox, ...sent.filter((memo) => !memo.scheduledAt)]
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)), [inbox, sent]);
+  const lists = {
+    all: delivered,
+    inbox,
+    sent: sent.filter((memo) => !memo.scheduledAt),
+    unread: inbox.filter((memo) => !memo.readAt),
+    favorite: delivered.filter((memo) => memo.favorite),
+    scheduled: sent.filter((memo) => memo.scheduledAt),
+  };
+  const list = lists[tab];
+  const filteredList = list.filter((memo) => matchesMemoSearch(memo, direction(memo), searchQuery));
+  const selectedMemo = filteredList.find((memo) => memo.id === selectedId);
+  const detailMemo = detailOpen ? [...inbox, ...sent].find((memo) => memo.id === selectedId) : undefined;
+  const directTarget = selectedMemo && (direction(selectedMemo) === 'inbox' ? selectedMemo.sender : selectedMemo.recipients[0]?.user);
+  const directEnabled = !!directTarget && !selectedMemo?.scheduledAt && selectedMemo?.recipients.length === 1;
 
   const handleOpen = (memo: MemoItem) => {
     setSelectedId(memo.id);
-    if (tab === 'inbox' && !memo.readAt) void onMarkRead(memo);
+    setDetailOpen(true);
+    if (direction(memo) === 'inbox' && !memo.readAt) void onMarkRead(memo);
   };
 
-  if (selectedMemo) {
+  if (detailMemo) {
     return (
       <div className={wrap.className} style={wrap.style}>
         <MemoDetail
-          memo={selectedMemo}
-          tab={tab}
+          key={detailMemo.id}
+          memo={detailMemo}
+          onComposeFromMemo={onComposeFromMemo}
+          onChat={onChat}
+          onProfile={onProfile}
+          tab={direction(detailMemo)}
           isDark={isDark}
-          onBack={() => setSelectedId(null)}
+          onBack={() => setDetailOpen(false)}
           onDelete={async (memo) => {
             await onDelete(memo);
             setSelectedId(null);
+            setDetailOpen(false);
           }}
         />
       </div>
@@ -178,7 +293,7 @@ function MemoPanel({
 
   const emptyMessage = (() => {
     if (list.length === 0) {
-      return tab === 'inbox' ? '받은 쪽지가 없습니다' : '보낸 쪽지가 없습니다';
+      return '이 쪽지함에 쪽지가 없습니다';
     }
     if (filteredList.length === 0) return '검색 결과가 없습니다';
     return null;
@@ -191,45 +306,26 @@ function MemoPanel({
         title="쪽지"
         className={useCustomAccent ? undefined : panelTitleRowBg(isDark)}
         style={useCustomAccent ? { background: orgTheme.headerBg } : undefined}
-        right={(
-          <button
-            type="button"
-            onClick={onOpenCompose}
-            className={cn(
-              'shrink-0 border-none rounded-lg px-3 py-1.5 text-[13px] font-semibold cursor-pointer',
-              !useCustomAccent && (isDark ? 'bg-brand-dark text-white hover:bg-brand-light' : 'bg-brand-dark text-white hover:bg-brand-light'),
-              useCustomAccent && 'text-white',
-            )}
-            style={useCustomAccent ? { background: orgTheme.accent } : undefined}
-          >
-            쓰기
-          </button>
-        )}
       />
 
-      <PanelToolbarRow isDark={isDark} className="p-0">
-        {(['inbox', 'sent'] as MemoTab[]).map((key) => (
-          <PanelNoDragWrap key={key} className="flex-1 h-full">
-            <button
-              type="button"
-              onClick={() => { setTab(key); setSelectedId(null); }}
-              className={cn(
-                'w-full h-full text-sm font-semibold border-none cursor-pointer',
-                tab === key
-                  ? (useCustomAccent
-                      ? 'border-b-2'
-                      : (isDark ? 'text-brand-light border-b-2 border-brand-light bg-slate-800/50' : 'text-brand-dark border-b-2 border-brand-dark bg-brand-dark/5'))
-                  : (isDark ? 'text-slate-400 bg-transparent' : 'text-slate-500 bg-transparent'),
-              )}
-              style={tab === key && useCustomAccent ? { color: orgTheme.activeText, borderColor: orgTheme.accent, background: orgTheme.activeBg } : undefined}
-            >
-              {key === 'inbox' ? '받은쪽지' : '보낸쪽지'}
-            </button>
-          </PanelNoDragWrap>
-        ))}
-      </PanelToolbarRow>
-
       <PanelToolbarRow isDark={isDark}>
+        <PanelNoDragWrap className="relative shrink-0">
+          <select
+            aria-label="쪽지함 선택"
+            value={tab}
+            onChange={(event) => {
+              setTab(event.target.value as MemoTab);
+              setSelectedId(null);
+            }}
+            className={cn(
+              'appearance-none cursor-pointer rounded-lg border py-1.5 pl-2.5 pr-7 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand',
+              isDark ? 'border-slate-600 bg-slate-800 text-slate-100 [color-scheme:dark]' : 'border-slate-200 bg-white text-slate-800',
+            )}
+          >
+            {memoTabs.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select>
+          <span aria-hidden="true" className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-500">▾</span>
+        </PanelNoDragWrap>
         <div className={cn(noDragClass, 'relative flex-1 min-w-0')} style={noDragStyle}>
           <span
             className={cn(
@@ -268,49 +364,87 @@ function MemoPanel({
         )}
       </PanelToolbarRow>
 
+      <div role="group" aria-label="쪽지함 기능" style={noDragStyle}
+        className={cn(noDragClass, 'flex flex-wrap items-center gap-1 px-3 py-2 border-b', isDark ? 'border-slate-700' : 'border-slate-200')}>
+        <button type="button" onClick={onOpenCompose} className="rounded-lg border-none bg-brand-dark px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand">
+          쪽지 보내기
+        </button>
+        {[
+          { label: '쪽지 갱신', action: onRefresh, enabled: true },
+          { label: '대화하기', action: () => directTarget && void onChat(directTarget.id), enabled: directEnabled },
+          { label: '회신', action: () => directTarget && onComposeFromMemo([asRecipient(directTarget)]), enabled: directEnabled },
+          { label: '전체회신', action: () => directTarget && onComposeFromMemo([asRecipient(directTarget)]), enabled: directEnabled },
+          { label: '전달', action: () => selectedMemo && onComposeFromMemo([], forwardText(selectedMemo)), enabled: !!selectedMemo },
+          { label: '삭제', action: () => selectedMemo && void onDelete(selectedMemo), enabled: !!selectedMemo },
+          { label: '인쇄', action: printMemo, enabled: !!selectedMemo },
+        ].map(({ label, action, enabled }) => (
+          <button key={label} type="button" disabled={!enabled} onClick={action}
+            className={cn('rounded-lg border-none bg-transparent px-2 py-1.5 text-xs font-medium text-inherit enabled:hover:bg-slate-500/15 disabled:cursor-default disabled:opacity-40',
+              label === '삭제' && enabled && (isDark ? 'text-red-300' : 'text-red-700'))}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {selectedMemo && <MemoPrintSheet memo={selectedMemo} />}
       <div className="flex-1 min-h-0 overflow-auto">
         {emptyMessage ? (
           <div className={cn('p-8 text-center text-sm', isDark ? 'text-[#a7adb4]' : 'text-[#5e6470]')}>
             {emptyMessage}
           </div>
         ) : (
-          <ul className="list-none m-0 p-0">
+          <ul className="list-none m-0 grid gap-2 p-3">
             {filteredList.map((memo) => {
-              const unread = tab === 'inbox' && !memo.readAt;
-              const subtitle = tab === 'inbox' ? memo.sender.name : formatRecipients(memo);
+              const selected = selectedId === memo.id;
+              const unread = direction(memo) === 'inbox' && !memo.readAt;
+              const subtitle = direction(memo) === 'inbox' ? memo.sender.name : formatRecipients(memo);
               return (
-                <li key={memo.id} className={cn('border-b', isDark ? 'border-[#3a3f46]' : 'border-[#eef0f3]')}>
-                  <button
-                    type="button"
-                    onClick={() => handleOpen(memo)}
-                    className={cn(
-                      'w-full px-5 py-3 border-none text-left cursor-pointer flex items-start gap-3',
-                      unread
-                        ? (isDark ? 'bg-[rgba(91,141,239,0.08)]' : 'bg-[rgba(var(--color-brand-dark-rgb),0.04)]')
-                        : 'bg-transparent',
-                    )}
-                  >
-                    {unread && (
-                      <span
-                        className={cn('mt-2 w-1.5 h-1.5 rounded-full shrink-0', !useCustomAccent && 'bg-brand')}
-                        style={useCustomAccent ? { background: orgTheme.accent } : undefined}
-                      />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className={cn('text-sm font-semibold truncate mb-0.5', isDark ? 'text-slate-100' : 'text-slate-900')}>
-                        {memo.subject}
+                <li key={memo.id} className={cn(
+                  'rounded-xl border transition-colors',
+                  selected
+                    ? (isDark ? 'border-brand-light/60 bg-brand-light/10' : 'border-brand-dark/40 bg-brand-dark/5')
+                    : (isDark ? 'border-slate-700 bg-slate-900/40 hover:border-slate-500' : 'border-slate-200 bg-white hover:border-slate-300'),
+                )}>
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setSelectedId(memo.id)}
+                      onDoubleClick={() => handleOpen(memo)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') { event.preventDefault(); handleOpen(memo); }
+                      }}
+                      className={cn(
+                        'flex-1 min-w-0 rounded-l-xl px-3 py-3 border-none text-left cursor-pointer flex items-start gap-2 bg-transparent',
+                        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-brand',
+                      )}
+                    >
+                      {unread && (
+                        <span
+                          className={cn('mt-2 w-1.5 h-1.5 rounded-full shrink-0', !useCustomAccent && 'bg-brand')}
+                          style={useCustomAccent ? { background: orgTheme.accent } : undefined}
+                        />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className={cn('text-sm truncate mb-1', unread ? 'font-bold' : 'font-semibold', isDark ? 'text-slate-100' : 'text-slate-900')}>
+                          {memo.subject}
+                        </div>
+                        <div className={cn('text-xs truncate mb-1', isDark ? 'text-slate-400' : 'text-slate-500')}>
+                          {subtitle}
+                        </div>
+                        <div className={cn('text-[11px] truncate', isDark ? 'text-slate-500' : 'text-slate-400')}>
+                          {memo.body}
+                        </div>
+                        <div className={cn('text-[11px] mt-1', isDark ? 'text-slate-500' : 'text-slate-400')}>
+                          {new Date(memo.scheduledAt ?? memo.createdAt).toLocaleString('ko-KR')}
+                        </div>
                       </div>
-                      <div className={cn('text-xs truncate mb-1', isDark ? 'text-slate-400' : 'text-slate-500')}>
-                        {subtitle}
-                      </div>
-                      <div className={cn('text-[11px] truncate', isDark ? 'text-slate-500' : 'text-slate-400')}>
-                        {memo.body}
-                      </div>
-                      <div className={cn('text-[11px] mt-1', isDark ? 'text-slate-500' : 'text-slate-400')}>
-                        {new Date(memo.createdAt).toLocaleString('ko-KR')}
-                      </div>
-                    </div>
-                  </button>
+                    </button>
+                    <button type="button" aria-label={memo.favorite ? '관심 쪽지 해제' : '관심 쪽지 등록'}
+                      aria-pressed={!!memo.favorite} onClick={() => void onFavorite(memo)}
+                      className={cn('rounded-lg px-2 text-lg leading-8 hover:bg-slate-500/15', memo.favorite ? 'text-amber-500' : 'text-slate-500')} title={memo.favorite ? '관심 쪽지 해제' : '관심 쪽지 등록'}>{memo.favorite ? '★' : '☆'}</button>
+                    <button type="button" onClick={() => handleOpen(memo)} aria-label={`${memo.subject} 열기`}
+                      className={cn('mr-2 rounded-lg px-2 py-1.5 text-xs font-medium', isDark ? 'text-slate-300 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-100')}>열기</button>
+                  </div>
                 </li>
               );
             })}
