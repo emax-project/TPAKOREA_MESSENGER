@@ -59,6 +59,11 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          # 시크릿이 등록되지 않았으면 빈 문자열로 들어오는데, electron-builder는 빈 CSC_LINK를
+          # 경로로 해석해 macOS 빌드가 "packages/client not a file"로 실패한다. 빈 값은 아예 지운다.
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
           args=()
           if [ -n "$CSC_LINK" ]; then
             # 서명 실패를 조용히 넘기고 서명 안 된 파일이 배포되는 일이 없도록 실패 처리한다
