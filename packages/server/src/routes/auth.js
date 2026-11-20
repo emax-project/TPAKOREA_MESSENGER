@@ -78,7 +78,7 @@ authRouter.post('/register', async (_req, res) => {
 
 const MFA_VERIFY = 'mfa-verify';
 const MFA_SETUP = 'mfa-setup';
-const MFA_ISSUER = 'CSIN-Tech';
+const MFA_ISSUER = 'TPA-Korea';
 
 /** 세션을 만들고 로그인 응답을 돌려준다(비밀번호·2차 인증을 모두 통과한 뒤에만 호출). */
 async function issueLogin(req, res, user, mustChangePassword, extra = {}) {

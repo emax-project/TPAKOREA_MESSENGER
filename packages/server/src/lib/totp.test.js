@@ -74,8 +74,8 @@ test('복구 코드: 8개 생성, 1회만 사용 가능, 대소문자·하이픈
 });
 
 test('otpauth URL 형식', () => {
-  const url = buildOtpauthUrl({ secret: 'ABC', account: 'a@b.com', issuer: 'CSIN-Tech' });
-  assert.match(url, /^otpauth:\/\/totp\/CSIN-Tech:a%40b\.com\?/);
+  const url = buildOtpauthUrl({ secret: 'ABC', account: 'a@b.com', issuer: 'TPA-Korea' });
+  assert.match(url, /^otpauth:\/\/totp\/TPA-Korea:a%40b\.com\?/);
   assert.match(url, /secret=ABC/);
-  assert.match(url, /issuer=CSIN-Tech/);
+  assert.match(url, /issuer=TPA-Korea/);
 });

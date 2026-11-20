@@ -109,7 +109,7 @@ export function buildOtpauthUrl({ secret, account, issuer }) {
 // ───── 비밀키 암호화(DB에 평문 저장 방지) ─────
 // AES-256-GCM, 키는 MFA_ENC_KEY(없으면 JWT_SECRET)에서 scrypt로 파생한다.
 // (단순 sha256은 비밀번호 해시로는 연산 비용이 너무 낮아 무차별 대입에 약하다)
-const KDF_SALT = 'csin-tech:mfa-secret:v1';
+const KDF_SALT = 'tpa-korea:mfa-secret:v1';
 let cachedKey = null; // { material, key } — scrypt는 일부러 느리므로 한 번만 계산해 재사용한다
 
 function encKey() {

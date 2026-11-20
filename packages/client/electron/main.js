@@ -784,7 +784,7 @@ function openChatWindow(roomId) {
     return;
   }
   if (!policyHelpers.canOpenChatWindow(chatWindows.length, maxChatWindows)) {
-    showCustomNotification('CSIN-Tech', `대화창은 최대 ${maxChatWindows}개까지 열 수 있습니다. 다른 창을 닫고 다시 시도해 주세요.`);
+    showCustomNotification('TPA-Korea', `대화창은 최대 ${maxChatWindows}개까지 열 수 있습니다. 다른 창을 닫고 다시 시도해 주세요.`);
     return;
   }
   createWindow({
@@ -1346,7 +1346,7 @@ ipcMain.handle('fetch-user-avatar', async (_, { userId }) => {
   }
 });
 
-// 업데이트 설치 파일이 쌓이는 폴더 정리 (Windows: %LOCALAPPDATA%\csin-tech-updater\pending).
+// 업데이트 설치 파일이 쌓이는 폴더 정리 (Windows: %LOCALAPPDATA%\tpa-korea-updater\pending).
 // 이전 버전은 앱 이름이 'client'라 %LOCALAPPDATA%\client-updater 를 썼고 설치 파일(약 166MB)이 그대로 남아 있다.
 // - 현재 폴더: 가장 최근 설치 파일 1개(차등 업데이트 기준)만 남기고 나머지·미완성 파일 삭제
 // - 옛 폴더: 더 이상 쓰이지 않으므로 pending 안의 파일 모두 삭제
@@ -1372,7 +1372,7 @@ async function pruneUpdaterCache() {
       }
     }
   };
-  const cache = path.join(process.env.LOCALAPPDATA, 'csin-tech-updater');
+  const cache = path.join(process.env.LOCALAPPDATA, 'tpa-korea-updater');
   const current = path.join(cache, 'pending');
   const pendingFiles = readFiles(current);
   const staleFiles = policyHelpers.pickStaleUpdaterFiles(pendingFiles);

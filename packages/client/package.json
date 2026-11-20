@@ -112,10 +112,10 @@
       "allowElevation": true,
       "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": "always",
-      "shortcutName": "CSIN-Tech"
+      "shortcutName": "TPA-Korea"
     },
     "extraMetadata": {
-      "name": "csin-tech"
+      "name": "tpa-korea"
     }
   }
 }

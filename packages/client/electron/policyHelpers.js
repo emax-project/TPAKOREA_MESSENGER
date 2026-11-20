@@ -1,6 +1,6 @@
 /** 메인 프로세스가 쓰는 작은 정책 헬퍼들 — Electron 없이 테스트할 수 있게 순수 함수로 둔다. */
 
-const LOCKED_NOTIFICATION = Object.freeze({ title: 'CSIN-Tech', body: '새 알림이 도착했습니다.' });
+const LOCKED_NOTIFICATION = Object.freeze({ title: 'TPA-Korea', body: '새 알림이 도착했습니다.' });
 
 /**
  * 화면이 잠겨 있으면 알림에서 보낸 사람·대화 내용·프로필 이미지·미리보기를 모두 지운다.
